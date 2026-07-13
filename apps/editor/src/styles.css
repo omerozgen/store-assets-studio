@@ -113,4 +113,13 @@ input[type="range"] { width: 100%; accent-color: #6366f1; }
 .capHandle:hover { background: rgba(99,102,241,0.32); }
 .capHandle.on { cursor: grabbing; background: rgba(99,102,241,0.45); border-style: solid; }
 .capHandle span { pointer-events: none; }
+
+.devHandle {
+  position: absolute; transform: translate(-50%, -50%); cursor: grab;
+  width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  background: rgba(15,17,20,0.55); border: 1.5px solid rgba(255,255,255,0.6); color: #fff;
+  font-size: 16px; touch-action: none; user-select: none; backdrop-filter: blur(2px);
+}
+.devHandle:hover { background: rgba(99,102,241,0.6); }
+.devHandle.on { cursor: grabbing; background: rgba(99,102,241,0.85); }
 .hint { font-size: 12px; color: #6b7280; }

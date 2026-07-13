@@ -4,7 +4,7 @@ import { renderSet, placeholderScreenshot, type Panel } from "@sas/core-renderer
 import { THEMES, resolveTheme } from "@sas/themes";
 import { STORE_TARGETS, getTarget, logicalViewport } from "@sas/store-specs";
 
-type EditorPanel = { id: string; src: string; captions: Record<string, string>; capX?: number; capY?: number };
+type EditorPanel = { id: string; src: string; captions: Record<string, string>; capX?: number; capY?: number; devX?: number; devY?: number };
 type Finish = "titanium" | "black" | "silver";
 type Pose = "flat" | "angled";
 
@@ -93,14 +93,24 @@ export function App() {
       screenshotSrc: p.src || placeholderScreenshot(1080, 2280, `Ekran ${i + 1}`, "#1f2937"),
       captionXFrac: p.capX,
       captionYFrac: p.capY,
+      deviceXFrac: p.devX,
+      deviceYFrac: p.devY,
     }));
 
   const renderPanels = useMemo(() => localePanels(locale), [panels, locale]);
 
-  const { wideHtml, viewport } = useMemo(
-    () => renderSet(theme, renderPanels, logicalViewport(target), target.deviceKind ?? "phone"),
-    [theme, renderPanels, target],
-  );
+  // Önizlemeyi 2× çözünürlükte render edip ekrana küçültüyoruz (supersample) →
+  // editördeki görüntü export kadar keskin olur (1× render soft görünüyordu).
+  const PREVIEW_SS = 2;
+  const { wideHtml, viewport, deviceCenters } = useMemo(() => {
+    const lv = logicalViewport(target);
+    return renderSet(
+      theme,
+      renderPanels,
+      { width: lv.width * PREVIEW_SS, height: lv.height * PREVIEW_SS },
+      target.deviceKind ?? "phone",
+    );
+  }, [theme, renderPanels, target]);
 
   // --- yükleme ---
   async function addFiles(files: FileList | File[]) {
@@ -170,6 +180,9 @@ export function App() {
   // Başlık serbest konumu (sürükle-bırak). Panele özel, tüm dillerde ortak.
   const setCapPos = (i: number, x: number, y: number) =>
     setPanels((prev) => prev.map((p, k) => (k === i ? { ...p, capX: x, capY: y } : p)));
+  // Cihaz serbest konumu (sürükle-bırak) — manuel, yerleşimi geçersiz kılar.
+  const setDevPos = (i: number, x: number, y: number) =>
+    setPanels((prev) => prev.map((p, k) => (k === i ? { ...p, devX: x, devY: y } : p)));
   const defaultCapY = captionPos === "top" ? 0.09 : 0.86;
   const caps = (panels.length ? panels : [{ captions: {} } as EditorPanel]).map((p) => ({
     text: p.captions[locale] || "",
@@ -199,6 +212,8 @@ export function App() {
               screenshotSrc: p.screenshotSrc,
               captionXFrac: p.captionXFrac,
               captionYFrac: p.captionYFrac,
+              deviceXFrac: p.deviceXFrac,
+              deviceYFrac: p.deviceYFrac,
             })),
           }),
         });
@@ -417,7 +432,9 @@ export function App() {
           viewport={viewport}
           panelCount={renderPanels.length}
           caps={caps}
+          devs={deviceCenters}
           onCaptionMove={setCapPos}
+          onDeviceMove={setDevPos}
           onDropImage={setPanelImage}
         />
       </main>
@@ -426,25 +443,30 @@ export function App() {
 }
 
 type Cap = { text: string; x: number; y: number };
+type Dev = { x: number; y: number };
 function Preview({
   wideHtml,
   viewport,
   panelCount,
   caps,
+  devs,
   onCaptionMove,
+  onDeviceMove,
   onDropImage,
 }: {
   wideHtml: string;
   viewport: { width: number; height: number };
   panelCount: number;
   caps: Cap[];
+  devs: Dev[];
   onCaptionMove: (i: number, x: number, y: number) => void;
+  onDeviceMove: (i: number, x: number, y: number) => void;
   onDropImage: (i: number, file: File) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0.2);
-  const [drag, setDrag] = useState<number | null>(null);
+  const [dragging, setDragging] = useState<{ kind: "cap" | "dev"; i: number } | null>(null);
   const [dropZone, setDropZone] = useState<number | null>(null);
   useEffect(() => {
     const el = wrapRef.current;
@@ -459,20 +481,47 @@ function Preview({
     return () => ro.disconnect();
   }, [viewport.width, viewport.height]);
 
-  const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
-  function onMove(i: number, e: { clientX: number; clientY: number }) {
-    const box = boxRef.current;
-    if (!box) return;
-    const r = box.getBoundingClientRect();
-    const fx = clamp(((e.clientX - r.left) / r.width) * panelCount - i, 0.06, 0.94);
-    const fy = clamp((e.clientY - r.top) / r.height, 0.02, 0.95);
-    onCaptionMove(i, fx, fy);
-  }
+  // Sağlam sürükleme: pointerdown ile başla, window düzeyinde takip et (küçük
+  // tutamağı kaçırma/iframe üstünde takılma sorunlarını çözer).
+  useEffect(() => {
+    if (!dragging) return;
+    const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+    const move = (e: PointerEvent) => {
+      const box = boxRef.current;
+      if (!box) return;
+      const r = box.getBoundingClientRect();
+      const { kind, i } = dragging;
+      const fx = ((e.clientX - r.left) / r.width) * panelCount - i;
+      const fy = (e.clientY - r.top) / r.height;
+      if (kind === "cap") onCaptionMove(i, clamp(fx, 0.06, 0.94), clamp(fy, 0.02, 0.95));
+      else onDeviceMove(i, clamp(fx, -0.1, 1.1), clamp(fy, 0.1, 0.95));
+    };
+    const up = () => setDragging(null);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+  }, [dragging, panelCount, onCaptionMove, onDeviceMove]);
+
+  const isDrag = (kind: "cap" | "dev", i: number) => dragging?.kind === kind && dragging.i === i;
 
   return (
     <div className="stage" ref={wrapRef}>
       <div className="canvasBox" ref={boxRef} style={{ width: viewport.width * scale, height: viewport.height * scale }}>
-        <iframe title="preview" srcDoc={wideHtml} style={{ width: viewport.width, height: viewport.height, transform: `scale(${scale})`, transformOrigin: "top left", border: "none" }} />
+        <iframe
+          title="preview"
+          srcDoc={wideHtml}
+          style={{
+            width: viewport.width,
+            height: viewport.height,
+            transform: `scale(${scale})`,
+            transformOrigin: "top left",
+            border: "none",
+            pointerEvents: dragging ? "none" : "auto", // sürüklerken olaylar üst pencereye geçsin
+          }}
+        />
         {/* Panel başına dosya bırakma bölgeleri (telefona doğrudan görsel at) */}
         {Array.from({ length: panelCount }, (_, i) => (
           <div
@@ -494,16 +543,26 @@ function Preview({
         {Array.from({ length: panelCount - 1 }, (_, i) => (
           <div key={i} className="divider" style={{ left: ((i + 1) / panelCount) * 100 + "%" }} />
         ))}
-        {/* Sürüklenebilir başlık tutamakları (iframe'in üstünde, konumu motorla aynı) */}
+        {/* Sürüklenebilir cihaz tutamakları (telefonun merkezinde) */}
+        {devs.map((d, i) => (
+          <div
+            key={"dev" + i}
+            className={"devHandle " + (isDrag("dev", i) ? "on" : "")}
+            style={{ left: ((i + d.x) / panelCount) * 100 + "%", top: d.y * 100 + "%" }}
+            onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "dev", i }); }}
+            title="Sürükleyerek telefonu taşı"
+          >
+            ✥
+          </div>
+        ))}
+        {/* Sürüklenebilir başlık tutamakları */}
         {caps.map((c, i) =>
           c.text ? (
             <div
               key={i}
-              className={"capHandle " + (drag === i ? "on" : "")}
+              className={"capHandle " + (isDrag("cap", i) ? "on" : "")}
               style={{ left: ((i + c.x) / panelCount) * 100 + "%", top: c.y * 100 + "%" }}
-              onPointerDown={(e) => { setDrag(i); (e.target as HTMLElement).setPointerCapture(e.pointerId); }}
-              onPointerMove={(e) => drag === i && onMove(i, e)}
-              onPointerUp={() => setDrag(null)}
+              onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "cap", i }); }}
               title="Sürükleyerek başlığı taşı"
             >
               <span>⠿ {c.text}</span>
@@ -511,7 +570,7 @@ function Preview({
           ) : null,
         )}
       </div>
-      <div className="hint">{panelCount} panel · başlıkları sürükleyerek taşıyabilirsin · canlı önizleme</div>
+      <div className="hint">{panelCount} panel · başlık (⠿) ve telefon (✥) tutamaklarını sürükle · canlı önizleme</div>
     </div>
   );
 }

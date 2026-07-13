@@ -75,6 +75,9 @@ export type Panel = {
   /** Başlık serbest konumu (panel oranı 0..1). Verilmezse tema varsayılanı (üst/alt, ortalı). */
   captionXFrac?: number; // metin bloğunun yatay MERKEZİ
   captionYFrac?: number; // metin bloğunun ÜST kenarı
+  /** Cihaz serbest konumu (panel oranı 0..1, MERKEZ). Verilmezse yerleşim (arrangement) belirler. */
+  deviceXFrac?: number;
+  deviceYFrac?: number;
 };
 
 export type ScreenshotSet = {
@@ -92,6 +95,8 @@ export type RenderSetResult = {
   viewport: { width: number; height: number };
   /** Panel başına dilim dikdörtgeni (mantıksal koordinat). */
   clips: Rect[];
+  /** Panel başına kullanılan cihaz merkezi (panel oranı 0..1). Editör tutamağı için. */
+  deviceCenters: { x: number; y: number }[];
 };
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
@@ -202,6 +207,7 @@ export function renderSet(
     .join("\n");
 
   // Panel içerikleri (başlık + cihaz), geniş tuvale mutlak konumlanır.
+  const deviceCenters: { x: number; y: number }[] = [];
   const items = panels
     .map((p, i) => {
       const panelCenterX = i * W + W / 2;
@@ -216,14 +222,20 @@ export function renderSet(
       const tiltY = dev.pose === "angled" ? (dev.tiltDeg ?? 16) : 0;
       const tiltX = dev.pose === "angled" ? (dev.tiltXDeg ?? 3) : 0;
 
-      // Cihaz konumu. straddle: cihaz merkezi panelin SAĞ sınırına (seam) oturur →
-      // telefon iki komşu panele bölünür.
-      const deviceCenterX = straddle ? (i + 1) * W : panelCenterX + xDrift;
+      // Cihaz konumu. Manuel override (deviceXFrac/YFrac) varsa yerleşimi geçersiz kılar.
+      // straddle: cihaz merkezi panelin SAĞ sınırına (seam) oturur → telefon bölünür.
       const capPos = theme.caption.position;
-      // Başlık üstteyse cihaz biraz aşağı, alttaysa biraz yukarı. Tablet daha ortada.
-      const deviceCenterY =
-        (isTablet ? (capPos === "top" ? H * 0.58 : H * 0.46) : straddle ? H * 0.55 : capPos === "top" ? H * 0.6 : H * 0.44) +
-        yDrift;
+      const hasDevPos = p.deviceXFrac != null && p.deviceYFrac != null;
+      const deviceCenterX = hasDevPos
+        ? i * W + p.deviceXFrac! * W
+        : straddle
+          ? (i + 1) * W
+          : panelCenterX + xDrift;
+      const deviceCenterY = hasDevPos
+        ? p.deviceYFrac! * H
+        : (isTablet ? (capPos === "top" ? H * 0.58 : H * 0.46) : straddle ? H * 0.55 : capPos === "top" ? H * 0.6 : H * 0.44) +
+          yDrift;
+      deviceCenters.push({ x: (deviceCenterX - i * W) / W, y: deviceCenterY / H });
       const deviceLeft = deviceCenterX - deviceW / 2;
       const deviceTop = deviceCenterY - deviceH / 2;
 
@@ -293,5 +305,5 @@ export function renderSet(
 </body>
 </html>`;
 
-  return { wideHtml, viewport: { width: canvasW, height: H }, clips };
+  return { wideHtml, viewport: { width: canvasW, height: H }, clips, deviceCenters };
 }
