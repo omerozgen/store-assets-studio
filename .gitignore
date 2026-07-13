@@ -1,0 +1,7 @@
+node_modules/
+out/
+dist/
+*.log
+.DS_Store
+# Üçüncü-taraf demo görseli (Unsplash, sadece yerel karşılaştırma için)
+apps/render-service/demo-assets/

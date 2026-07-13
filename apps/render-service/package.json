@@ -1,0 +1,18 @@
+{
+  "name": "@sas/render-service",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "demo": "tsx src/demo.ts",
+    "demo:set": "tsx src/demo-set.ts",
+    "demo:photo": "tsx src/demo-photo.ts",
+    "serve": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "@sas/core-renderer": "workspace:*",
+    "@sas/device-frames": "workspace:*",
+    "@sas/store-specs": "workspace:*",
+    "@sas/themes": "workspace:*",
+    "playwright": "^1.49.1"
+  }
+}

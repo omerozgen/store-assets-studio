@@ -1,0 +1,19 @@
+{
+  "name": "store-assets-studio",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "type": "module",
+  "scripts": {
+    "render:demo": "pnpm --filter @sas/render-service demo",
+    "render:set": "pnpm --filter @sas/render-service demo:set",
+    "render:photo": "pnpm --filter @sas/render-service demo:photo",
+    "export:serve": "pnpm --filter @sas/render-service serve",
+    "editor": "pnpm --filter @sas/editor dev",
+    "test:specs": "pnpm --filter @sas/store-specs test"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
