@@ -1,6 +1,6 @@
 # Render servisi — Cloud Run için (Playwright + Chromium)
-# Derleme:  docker build -f apps/render-service/Dockerfile -t sas-render .
-# (Bağlam repo kökü olmalı — monorepo paketleri kopyalanır.)
+# Repo kökünde durur: `gcloud run deploy --source .` bunu otomatik kullanır
+# (monorepo paketlerini kopyalayabilmesi için bağlam kök olmalı).
 FROM node:22-bookworm-slim
 
 RUN corepack enable

@@ -25,12 +25,14 @@ Repo kökünden (Dockerfile monorepo paketlerini kopyalar):
 gcloud run deploy sas-render \
   --source . \
   --region europe-west1 \
-  --dockerfile apps/render-service/Dockerfile \
   --memory 2Gi --cpu 2 \
   --max-instances 3 --min-instances 0 \
   --allow-unauthenticated \
   --set-env-vars RATE_LIMIT_PER_DAY=20,MAX_CONCURRENT_RENDERS=2
 ```
+
+> `--source .` repo kökündeki `Dockerfile`'ı otomatik kullanır (Cloud Build'de
+> derlenir — yerelde Docker gerekmez).
 
 Notlar:
 - `min-instances 0` → boşta maliyet yok ama ilk istekte soğuk başlama (~10-20 sn).
