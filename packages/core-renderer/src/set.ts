@@ -70,6 +70,19 @@ export type Theme = {
   };
 };
 
+/** Serbest metin kutusu — başlıktan bağımsız, panele istenildiği kadar eklenir. */
+export type TextBox = {
+  text: string;
+  /** Panel oranı (0..1): x = metnin yatay MERKEZİ, y = üst kenarı. */
+  xFrac: number;
+  yFrac: number;
+  /** Font boyutu, panel yüksekliğinin yüzdesi (varsayılan 3.2). */
+  sizePct?: number;
+  /** Varsayılan tema metin rengi. */
+  color?: string;
+  weight?: number;
+};
+
 export type Panel = {
   /** URL veya data URI. */
   screenshotSrc: string;
@@ -80,6 +93,8 @@ export type Panel = {
   /** Cihaz serbest konumu (panel oranı 0..1, MERKEZ). Verilmezse yerleşim (arrangement) belirler. */
   deviceXFrac?: number;
   deviceYFrac?: number;
+  /** Ek serbest metin kutuları. */
+  texts?: TextBox[];
 };
 
 export type ScreenshotSet = {
@@ -278,7 +293,20 @@ export function renderSet(
           ${mockup}
         </div>`;
 
-      return captionHtml + deviceHtml;
+      // Serbest metin kutuları (başlıkla aynı katman, panele oranlı konum).
+      const textsHtml = (p.texts ?? [])
+        .filter((t) => t.text)
+        .map((t) => {
+          const size = ((t.sizePct ?? 3.2) / 100) * H;
+          return `<div style="position:absolute;left:${i * W + t.xFrac * W}px;top:${t.yFrac * H}px;
+            transform:translateX(-50%);max-width:${W * 0.9}px;color:${t.color ?? theme.font.color};
+            font-size:${size}px;font-weight:${t.weight ?? 600};font-family:${fontFamily};
+            line-height:1.25;text-align:center;white-space:pre-wrap;z-index:3;
+            text-shadow:0 ${H * 0.003}px ${H * 0.015}px rgba(0,0,0,0.2);">${escapeHtml(t.text)}</div>`;
+        })
+        .join("");
+
+      return captionHtml + textsHtml + deviceHtml;
     })
     .join("\n");
 

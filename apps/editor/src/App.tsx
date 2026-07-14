@@ -4,7 +4,17 @@ import { renderSet, placeholderScreenshot, type Panel } from "@sas/core-renderer
 import { THEMES, resolveTheme } from "@sas/themes";
 import { STORE_TARGETS, getTarget, logicalViewport } from "@sas/store-specs";
 
-type EditorPanel = { id: string; src: string; captions: Record<string, string>; capX?: number; capY?: number; devX?: number; devY?: number };
+type PanelText = { id: string; content: Record<string, string>; x: number; y: number; sizePct: number; color: string };
+type EditorPanel = {
+  id: string;
+  src: string;
+  captions: Record<string, string>;
+  capX?: number;
+  capY?: number;
+  devX?: number;
+  devY?: number;
+  texts?: PanelText[];
+};
 type Finish = "titanium" | "black" | "silver";
 type Pose = "flat" | "angled";
 
@@ -150,7 +160,7 @@ export function App() {
   const [dragOver, setDragOver] = useState(false);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [exporting, setExporting] = useState<string | null>(null);
-  const [sel, setSel] = useState<{ kind: "cap" | "dev"; i: number } | null>(null);
+  const [sel, setSel] = useState<{ kind: "cap" | "dev" | "txt"; i: number; j?: number } | null>(null);
 
   const target = getTarget(targetId);
 
@@ -181,7 +191,8 @@ export function App() {
     };
   }
   function applyProject(p: ProjectState) {
-    setPanels(p.panels.map((x) => ({ ...x, id: uid() }))); // id çakışmasın
+    // id çakışmasın; eski kayıtlarda texts olmayabilir → boş dizi.
+    setPanels(p.panels.map((x) => ({ ...x, id: uid(), texts: (x.texts ?? []).map((t) => ({ ...t, id: uid() })) })));
     setThemeId(p.themeId); setFinish(p.finish); setPose(p.pose); setOrientation(p.orientation);
     setTiltDeg(p.tiltDeg); setLeanDeg(p.leanDeg); setThickness(p.thickness);
     setArrangement(p.arrangement); setCaptionPos(p.captionPos);
@@ -263,6 +274,9 @@ export function App() {
       captionYFrac: p.capY,
       deviceXFrac: p.devX,
       deviceYFrac: p.devY,
+      texts: (p.texts ?? [])
+        .map((t) => ({ text: t.content[loc] || "", xFrac: t.x, yFrac: t.y, sizePct: t.sizePct, color: t.color }))
+        .filter((t) => t.text),
     }));
 
   const renderPanels = useMemo(() => localePanels(locale), [panels, locale]);
@@ -327,12 +341,15 @@ export function App() {
     if (locales.length <= 1) return;
     setLocales((p) => p.filter((l) => l !== code));
     if (locale === code) setLocale(locales.find((l) => l !== code)!);
-    // Silinen dilin başlıklarını panellerden de temizle (bayat veri kalmasın).
+    // Silinen dilin başlık + metinlerini panellerden de temizle (bayat veri kalmasın).
     setPanels((prev) =>
       prev.map((p) => {
-        if (!(code in p.captions)) return p;
         const { [code]: _removed, ...rest } = p.captions;
-        return { ...p, captions: rest };
+        const texts = (p.texts ?? []).map((t) => {
+          const { [code]: _r, ...c } = t.content;
+          return { ...t, content: c };
+        });
+        return { ...p, captions: rest, texts };
       }),
     );
   };
@@ -352,6 +369,46 @@ export function App() {
       return n;
     });
   }
+
+  // ---- Serbest metin kutuları ----
+  const addText = (i: number) =>
+    setPanels((prev) =>
+      prev.map((p, k) =>
+        k === i
+          ? {
+              ...p,
+              texts: [
+                ...(p.texts ?? []),
+                {
+                  id: uid(),
+                  content: { [locale]: "Metin" },
+                  x: 0.5,
+                  y: Math.min(0.9, 0.3 + (p.texts?.length ?? 0) * 0.08),
+                  sizePct: 3.2,
+                  color: "#ffffff",
+                },
+              ],
+            }
+          : p,
+      ),
+    );
+  const updateText = (i: number, j: number, patch: Partial<PanelText> | { content: string }) =>
+    setPanels((prev) =>
+      prev.map((p, k) => {
+        if (k !== i) return p;
+        const texts = [...(p.texts ?? [])];
+        const t = texts[j];
+        if (!t) return p;
+        texts[j] =
+          "content" in patch && typeof patch.content === "string"
+            ? { ...t, content: { ...t.content, [locale]: patch.content } }
+            : { ...t, ...(patch as Partial<PanelText>) };
+        return { ...p, texts };
+      }),
+    );
+  const removeText = (i: number, j: number) =>
+    setPanels((prev) => prev.map((p, k) => (k === i ? { ...p, texts: (p.texts ?? []).filter((_, m) => m !== j) } : p)));
+  const setTextPos = (i: number, j: number, x: number, y: number) => updateText(i, j, { x, y });
 
   // Başlık serbest konumu (sürükle-bırak). Panele özel, tüm dillerde ortak.
   const setCapPos = (i: number, x: number, y: number) =>
@@ -387,6 +444,9 @@ export function App() {
       if (sel.kind === "cap") {
         const c = caps[sel.i];
         if (c) setCapPos(sel.i, clamp(c.x + dx, 0.06, 0.94), clamp(c.y + dy, 0.02, 0.95));
+      } else if (sel.kind === "txt") {
+        const t = panels[sel.i]?.texts?.[sel.j ?? -1];
+        if (t) setTextPos(sel.i, sel.j!, clamp(t.x + dx, 0.04, 0.96), clamp(t.y + dy, 0.02, 0.96));
       } else {
         const d = deviceCenters[sel.i];
         if (d) setDevPos(sel.i, clamp(d.x + dx, -0.1, 1.1), clamp(d.y + dy, 0.1, 0.95));
@@ -460,6 +520,7 @@ export function App() {
               captionYFrac: p.captionYFrac,
               deviceXFrac: p.deviceXFrac,
               deviceYFrac: p.deviceYFrac,
+              texts: p.texts,
             })),
           }),
         });
@@ -662,7 +723,33 @@ export function App() {
                 <div className="thumb" title="Sürükleyerek sırala">{p.src ? <img src={p.src} alt="" /> : <span>boş</span>}</div>
                 <div className="pmeta">
                   <input value={p.captions[locale] ?? ""} placeholder={`Başlık (${locale.toUpperCase()})…`} onChange={(e) => setCaption(i, e.target.value)} />
+                  {(p.texts ?? []).map((t, j) => (
+                    <div className="txtrow" key={t.id}>
+                      <input
+                        value={t.content[locale] ?? ""}
+                        placeholder={`Metin (${locale.toUpperCase()})…`}
+                        onChange={(e) => updateText(i, j, { content: e.target.value })}
+                      />
+                      <input
+                        type="number"
+                        min={1.5}
+                        max={10}
+                        step={0.5}
+                        value={t.sizePct}
+                        title="Boyut (%)"
+                        onChange={(e) => updateText(i, j, { sizePct: +e.target.value })}
+                      />
+                      <input
+                        type="color"
+                        value={t.color}
+                        title="Renk"
+                        onChange={(e) => updateText(i, j, { color: e.target.value })}
+                      />
+                      <button onClick={() => removeText(i, j)}>✕</button>
+                    </div>
+                  ))}
                   <div className="prow">
+                    <button onClick={() => addText(i)} title="Serbest metin kutusu ekle">+ metin</button>
                     <button onClick={() => move(i, -1)} disabled={i === 0}>↑</button>
                     <button onClick={() => move(i, 1)} disabled={i === panels.length - 1}>↓</button>
                     <button onClick={() => remove(i)}>✕</button>
@@ -751,7 +838,11 @@ export function App() {
           caps={caps}
           devs={deviceCenters}
           onCaptionMove={setCapPos}
+          txts={panels.flatMap((p, i) =>
+            (p.texts ?? []).map((t, j) => ({ i, j, text: t.content[locale] || "Metin", x: t.x, y: t.y })),
+          )}
           onDeviceMove={setDevPos}
+          onTextMove={setTextPos}
           onDropImage={setPanelImage}
           onSelect={setSel}
         />
@@ -762,14 +853,17 @@ export function App() {
 
 type Cap = { text: string; x: number; y: number };
 type Dev = { x: number; y: number };
+type Txt = { i: number; j: number; text: string; x: number; y: number };
 function Preview({
   wideHtml,
   viewport,
   panelCount,
   caps,
   devs,
+  txts,
   onCaptionMove,
   onDeviceMove,
+  onTextMove,
   onDropImage,
   onSelect,
 }: {
@@ -778,15 +872,17 @@ function Preview({
   panelCount: number;
   caps: Cap[];
   devs: Dev[];
+  txts: Txt[];
   onCaptionMove: (i: number, x: number, y: number) => void;
   onDeviceMove: (i: number, x: number, y: number) => void;
+  onTextMove: (i: number, j: number, x: number, y: number) => void;
   onDropImage: (i: number, file: File) => void;
-  onSelect: (s: { kind: "cap" | "dev"; i: number }) => void;
+  onSelect: (s: { kind: "cap" | "dev" | "txt"; i: number; j?: number }) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0.2);
-  const [dragging, setDragging] = useState<{ kind: "cap" | "dev"; i: number } | null>(null);
+  const [dragging, setDragging] = useState<{ kind: "cap" | "dev" | "txt"; i: number; j?: number } | null>(null);
   const [dropZone, setDropZone] = useState<number | null>(null);
   useEffect(() => {
     const el = wrapRef.current;
@@ -810,10 +906,11 @@ function Preview({
       const box = boxRef.current;
       if (!box) return;
       const r = box.getBoundingClientRect();
-      const { kind, i } = dragging;
+      const { kind, i, j } = dragging;
       const fx = ((e.clientX - r.left) / r.width) * panelCount - i;
       const fy = (e.clientY - r.top) / r.height;
       if (kind === "cap") onCaptionMove(i, clamp(fx, 0.06, 0.94), clamp(fy, 0.02, 0.95));
+      else if (kind === "txt") onTextMove(i, j!, clamp(fx, 0.04, 0.96), clamp(fy, 0.02, 0.96));
       else onDeviceMove(i, clamp(fx, -0.1, 1.1), clamp(fy, 0.1, 0.95));
     };
     const up = () => setDragging(null);
@@ -823,7 +920,7 @@ function Preview({
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
     };
-  }, [dragging, panelCount, onCaptionMove, onDeviceMove]);
+  }, [dragging, panelCount, onCaptionMove, onDeviceMove, onTextMove]);
 
   const isDrag = (kind: "cap" | "dev", i: number) => dragging?.kind === kind && dragging.i === i;
 
@@ -911,6 +1008,18 @@ function Preview({
             </div>
           ) : null,
         )}
+        {/* Sürüklenebilir serbest metin tutamakları */}
+        {txts.map((t) => (
+          <div
+            key={`t${t.i}-${t.j}`}
+            className={"txtHandle " + (dragging?.kind === "txt" && dragging.i === t.i && dragging.j === t.j ? "on" : "")}
+            style={{ left: ((t.i + t.x) / panelCount) * 100 + "%", top: t.y * 100 + "%" }}
+            onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "txt", i: t.i, j: t.j }); onSelect({ kind: "txt", i: t.i, j: t.j }); }}
+            title="Sürükleyerek metni taşı (ok tuşlarıyla ince ayar)"
+          >
+            <span>T {t.text}</span>
+          </div>
+        ))}
       </div>
       <div className="hint">{panelCount} panel · başlık (⠿) ve telefon (✥) tutamaklarını sürükle · canlı önizleme</div>
     </div>
