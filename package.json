@@ -10,9 +10,11 @@
     "render:photo": "pnpm --filter @sas/render-service demo:photo",
     "export:serve": "pnpm --filter @sas/render-service serve",
     "editor": "pnpm --filter @sas/editor dev",
-    "test:specs": "pnpm --filter @sas/store-specs test"
+    "test:specs": "pnpm --filter @sas/store-specs test",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
+    "@types/node": "^26.1.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

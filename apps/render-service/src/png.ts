@@ -101,3 +101,75 @@ export function columnPixels(img: DecodedPng, x: number): Buffer {
   }
   return col;
 }
+
+// ---- Minimal PNG encoder (8-bit truecolor RGB, filter 0) ----
+
+const CRC_TABLE = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c;
+  }
+  return t;
+})();
+
+function crc32(buf: Buffer): number {
+  let c = ~0;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return ~c >>> 0;
+}
+
+function chunk(type: string, data: Buffer): Buffer {
+  const head = Buffer.alloc(4);
+  head.writeUInt32BE(data.length, 0);
+  const typed = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(typed), 0);
+  return Buffer.concat([head, typed, crc]);
+}
+
+/** RGB (3 kanal) piksel verisini 24-bit, alfasız PNG'ye kodlar. */
+export function encodePngRgb(width: number, height: number, rgb: Buffer): Buffer {
+  const stride = width * 3;
+  const raw = Buffer.alloc((stride + 1) * height); // her satır başında filter byte (0)
+  for (let y = 0; y < height; y++) {
+    rgb.copy(raw, y * (stride + 1) + 1, y * stride, (y + 1) * stride);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 2; // color type: truecolor (RGB, alfasız)
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", zlib.deflateSync(raw, { level: 6 })),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+/**
+ * Mağaza uyumu: RGBA PNG'yi 24-bit RGB'ye düzleştirir (Apple/Google alfa istemez).
+ * Yarı saydam pikseller beyaz zemine bindirilir; zaten RGB ise dokunmaz.
+ */
+export function flattenPngToRgb(png: Buffer): Buffer {
+  const img = decodePng(png);
+  if (img.channels === 3) return png;
+  const { width, height, data } = img;
+  const rgb = Buffer.alloc(width * height * 3);
+  for (let i = 0, o = 0; i < data.length; i += 4, o += 3) {
+    const a = data[i + 3];
+    if (a === 255) {
+      rgb[o] = data[i];
+      rgb[o + 1] = data[i + 1];
+      rgb[o + 2] = data[i + 2];
+    } else {
+      // Beyaz zemine alfa-birleştirme
+      rgb[o] = (data[i] * a + 255 * (255 - a) + 127) / 255;
+      rgb[o + 1] = (data[i + 1] * a + 255 * (255 - a) + 127) / 255;
+      rgb[o + 2] = (data[i + 2] * a + 255 * (255 - a) + 127) / 255;
+    }
+  }
+  return encodePngRgb(width, height, rgb);
+}

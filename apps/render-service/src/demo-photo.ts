@@ -83,7 +83,15 @@ async function detectScreenQuad(page: import("playwright").Page, dataUri: string
 
 async function main() {
   await mkdir(outDir, { recursive: true });
-  const jpg = await readFile(assetPath);
+  // Demo asset'i gitignore'da (üçüncü-taraf Unsplash görseli) — repo klonunda olmayabilir.
+  const jpg = await readFile(assetPath).catch(() => {
+    console.error(
+      `Demo görseli yok: ${assetPath}\n` +
+        "Bu demo, yerel karşılaştırma için üçüncü-taraf (Unsplash) bir foto kullanır ve repoya dahil edilmez.\n" +
+        "Boş ekranlı, açılı bir telefon fotoğrafını bu yola koyup tekrar çalıştırın.",
+    );
+    process.exit(1);
+  });
   const photoUri = `data:image/jpeg;base64,${jpg.toString("base64")}`;
 
   const browser = await chromium.launch();

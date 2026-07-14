@@ -24,12 +24,20 @@ final PNG export) çalışır → "önizlemede gördüğün = çıktı" (WYSIWYG
 ```bash
 pnpm install
 pnpm --filter @sas/render-service exec playwright install chromium  # bir kez
+pnpm typecheck       # TS kontrolü (tüm paketler)
 pnpm test:specs      # registry testleri
 pnpm render:demo     # 8 hedefe örnek render → apps/render-service/out/
+pnpm render:set      # 3 panelli panorama + boyut + süreklilik doğrulaması
 ```
 
 `render:demo` her hedefi render eder ve çıktı boyutunun mağaza ölçüsüyle
 **birebir eşleştiğini** assert eder (piksel doğruluğu).
+
+**Mağaza uyumu:** Tüm PNG çıktıları **24-bit RGB (alfasız)** olarak düzleştirilir —
+Apple/Google alfa kanallı PNG kabul etmez (Playwright ham çıktısı RGBA'dır; export
+katmanı bunu otomatik dönüştürür). Boyutlar resmi speclerle doğrulandı: iPhone 6.9"
+1290×2796 ✓, 6.5" 1242×2688 ✓, iPad 2048×2732 ✓, feature graphic 1024×500 ✓,
+icon 1024/512 ✓.
 
 ## Durum
 

@@ -159,6 +159,14 @@ export function App() {
     if (locales.length <= 1) return;
     setLocales((p) => p.filter((l) => l !== code));
     if (locale === code) setLocale(locales.find((l) => l !== code)!);
+    // Silinen dilin başlıklarını panellerden de temizle (bayat veri kalmasın).
+    setPanels((prev) =>
+      prev.map((p) => {
+        if (!(code in p.captions)) return p;
+        const { [code]: _removed, ...rest } = p.captions;
+        return { ...p, captions: rest };
+      }),
+    );
   };
 
   const toggleTarget = (id: string) =>
@@ -183,7 +191,8 @@ export function App() {
   // Cihaz serbest konumu (sürükle-bırak) — manuel, yerleşimi geçersiz kılar.
   const setDevPos = (i: number, x: number, y: number) =>
     setPanels((prev) => prev.map((p, k) => (k === i ? { ...p, devX: x, devY: y } : p)));
-  const defaultCapY = captionPos === "top" ? 0.09 : 0.86;
+  // Motor varsayılanıyla aynı (set.ts: top=H*0.05, bottom=H*0.82) → tutamak metnin üstünde durur.
+  const defaultCapY = captionPos === "top" ? 0.05 : 0.82;
   const caps = (panels.length ? panels : [{ captions: {} } as EditorPanel]).map((p) => ({
     text: p.captions[locale] || "",
     x: p.capX ?? 0.5,

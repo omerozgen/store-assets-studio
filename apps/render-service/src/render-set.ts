@@ -6,6 +6,7 @@ import { chromium, type Browser } from "playwright";
 import { renderSet, type Panel, type Theme } from "@sas/core-renderer";
 import { logicalViewport, type StoreTarget } from "@sas/store-specs";
 import { readPngSize } from "./render.ts";
+import { flattenPngToRgb } from "./png.ts";
 
 export type PanelResult = {
   index: number;
@@ -40,11 +41,13 @@ export async function renderSetToPngs(
     const page = await context.newPage();
     await page.setContent(wideHtml, { waitUntil: "networkidle" });
 
-    const fullCanvas = Buffer.from(await page.screenshot({ type: "png" }));
+    // Mağaza uyumu: Playwright RGBA üretir; Apple/Google alfasız (24-bit RGB) ister.
+    // Süreklilik testi ikisini karşılaştırdığı için tam tuval de düzleştirilir.
+    const fullCanvas = flattenPngToRgb(Buffer.from(await page.screenshot({ type: "png" })));
 
     const panelResults: PanelResult[] = [];
     for (let i = 0; i < clips.length; i++) {
-      const png = Buffer.from(await page.screenshot({ type: "png", clip: clips[i] }));
+      const png = flattenPngToRgb(Buffer.from(await page.screenshot({ type: "png", clip: clips[i] })));
       const actual = readPngSize(png);
       const ok = actual.width === target.width && actual.height === target.height;
       panelResults.push({ index: i, png, actual, ok });
@@ -75,7 +78,7 @@ export async function renderSingleToPng(
   try {
     const page = await context.newPage();
     await page.setContent(html, { waitUntil: "networkidle" });
-    const png = Buffer.from(await page.screenshot({ type: "png" }));
+    const png = flattenPngToRgb(Buffer.from(await page.screenshot({ type: "png" })));
     const actual = readPngSize(png);
     return { index: 0, png, actual, ok: actual.width === target.width && actual.height === target.height };
   } finally {
