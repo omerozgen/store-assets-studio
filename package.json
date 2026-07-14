@@ -11,6 +11,8 @@
     "export:serve": "pnpm --filter @sas/render-service serve",
     "editor": "pnpm --filter @sas/editor dev",
     "test:specs": "pnpm --filter @sas/store-specs test",
+    "test:png": "pnpm --filter @sas/render-service test",
+    "test": "pnpm test:specs && pnpm test:png && pnpm typecheck",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {

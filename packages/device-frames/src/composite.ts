@@ -102,10 +102,12 @@ export function compositeFrame(
   const shotZ = frameOnTop ? 1 : 2;
   const frameZ = frameOnTop ? 2 : 1;
 
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   return `<div style="position:relative;width:${frame.canvas.width}px;height:${frame.canvas.height}px;">
-    <img src="${screenshotSrc}" width="${sw}" height="${sh}" alt="" style="
+    <img src="${esc(screenshotSrc)}" width="${sw}" height="${sh}" alt="" style="
       position:absolute;left:0;top:0;transform-origin:0 0;transform:${matrix};z-index:${shotZ};display:block;" />
-    <img src="${frame.frameSrc}" width="${frame.canvas.width}" height="${frame.canvas.height}" alt="" style="
+    <img src="${esc(frame.frameSrc)}" width="${frame.canvas.width}" height="${frame.canvas.height}" alt="" style="
       position:absolute;left:0;top:0;z-index:${frameZ};display:block;" />
   </div>`;
 }

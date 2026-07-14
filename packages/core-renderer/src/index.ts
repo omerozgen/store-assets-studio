@@ -11,9 +11,10 @@
  * böylece aynı sahne farklı hedeflerde (telefon/tablet/feature-graphic) ölçeklenir.
  */
 
-export type Background =
-  | { type: "solid"; color: string }
-  | { type: "gradient"; colors: string[]; angle?: number };
+import { escapeHtml, backgroundCss, type Background } from "./util.ts";
+
+// Paylaşılan yardımcılar + Background tipi buradan gelir.
+export * from "./util.ts";
 
 export type Caption = {
   text: string;
@@ -51,20 +52,6 @@ export * from "./set.ts";
 // Tekil varlıklar: feature graphic + icon.
 export * from "./assets.ts";
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function backgroundCss(bg: Background): string {
-  if (bg.type === "solid") return bg.color;
-  const angle = bg.angle ?? 135;
-  return `linear-gradient(${angle}deg, ${bg.colors.join(", ")})`;
-}
-
 /**
  * Sahneyi tam bir HTML belgesine çevirir. Salt fonksiyon, yan etkisiz.
  * viewport: mantıksal CSS boyutu (store-specs logicalViewport'tan gelir).
@@ -92,7 +79,7 @@ export function renderScene(scene: Scene, viewport: Viewport): string {
     : "";
 
   const shotHtml = shot
-    ? `<div class="shot ${frame ? "framed" : ""}"><img src="${shot.src}" alt="" /></div>`
+    ? `<div class="shot ${frame ? "framed" : ""}"><img src="${escapeHtml(shot.src)}" alt="" /></div>`
     : "";
 
   // capPos'a göre sıralama: flex column, caption üstte veya altta.

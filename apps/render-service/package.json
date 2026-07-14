@@ -6,7 +6,8 @@
     "demo": "tsx src/demo.ts",
     "demo:set": "tsx src/demo-set.ts",
     "demo:photo": "tsx src/demo-photo.ts",
-    "serve": "tsx src/server.ts"
+    "serve": "tsx src/server.ts",
+    "test": "tsx src/png.test.ts"
   },
   "dependencies": {
     "@sas/core-renderer": "workspace:*",

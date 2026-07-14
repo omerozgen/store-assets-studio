@@ -4,16 +4,7 @@
  */
 import { phoneMockupHtml } from "@sas/device-frames";
 import type { Theme } from "./set.ts";
-
-type Background = Theme["background"];
-
-function bgCss(bg: Background): string {
-  if (bg.type === "solid") return bg.color;
-  return `linear-gradient(${bg.angle ?? 135}deg, ${bg.colors.join(", ")})`;
-}
-function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
+import { escapeHtml as esc, backgroundCss as bgCss, type Background } from "./util.ts";
 function doc(w: number, h: number, inner: string, font: string): string {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     *{margin:0;padding:0;box-sizing:border-box}
@@ -69,7 +60,7 @@ export function renderIconHtml(
   const { width: W, height: H } = panel;
   const font = opts.fontFamily ?? "-apple-system, Segoe UI, Roboto, sans-serif";
   if (opts.src) {
-    const inner = `<img src="${opts.src}" style="width:${W}px;height:${H}px;object-fit:cover;display:block;"/>`;
+    const inner = `<img src="${esc(opts.src)}" style="width:${W}px;height:${H}px;object-fit:cover;display:block;"/>`;
     return doc(W, H, inner, font);
   }
   const bg = opts.background ? bgCss(opts.background) : "linear-gradient(135deg,#6366f1,#ec4899)";

@@ -129,24 +129,29 @@ function chunk(type: string, data: Buffer): Buffer {
   return Buffer.concat([head, typed, crc]);
 }
 
-/** RGB (3 kanal) piksel verisini 24-bit, alfasız PNG'ye kodlar. */
-export function encodePngRgb(width: number, height: number, rgb: Buffer): Buffer {
-  const stride = width * 3;
+/** Ham piksel verisini PNG'ye kodlar (channels: 3 = RGB, 4 = RGBA). */
+export function encodePng(width: number, height: number, data: Buffer, channels: 3 | 4 = 3): Buffer {
+  const stride = width * channels;
   const raw = Buffer.alloc((stride + 1) * height); // her satır başında filter byte (0)
   for (let y = 0; y < height; y++) {
-    rgb.copy(raw, y * (stride + 1) + 1, y * stride, (y + 1) * stride);
+    data.copy(raw, y * (stride + 1) + 1, y * stride, (y + 1) * stride);
   }
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8; // bit depth
-  ihdr[9] = 2; // color type: truecolor (RGB, alfasız)
+  ihdr[9] = channels === 3 ? 2 : 6; // color type: truecolor / truecolor+alpha
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk("IHDR", ihdr),
     chunk("IDAT", zlib.deflateSync(raw, { level: 6 })),
     chunk("IEND", Buffer.alloc(0)),
   ]);
+}
+
+/** RGB (3 kanal) piksel verisini 24-bit, alfasız PNG'ye kodlar. */
+export function encodePngRgb(width: number, height: number, rgb: Buffer): Buffer {
+  return encodePng(width, height, rgb, 3);
 }
 
 /**

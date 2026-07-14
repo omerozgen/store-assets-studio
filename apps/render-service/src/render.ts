@@ -6,6 +6,7 @@
 import { chromium, type Browser } from "playwright";
 import { renderScene, type Scene } from "@sas/core-renderer";
 import { getTarget, logicalViewport, type StoreTarget } from "@sas/store-specs";
+import { flattenPngToRgb } from "./png.ts";
 
 /** Bir PNG buffer'ının IHDR'ından genişlik/yükseklik okur (sharp'a gerek yok). */
 export function readPngSize(buf: Buffer): { width: number; height: number } {
@@ -44,7 +45,7 @@ export async function renderTargetToPng(
     const html = renderScene(scene, vp);
     await page.setContent(html, { waitUntil: "networkidle" });
     const png = await page.screenshot({ type: "png" });
-    const buf = Buffer.from(png);
+    const buf = flattenPngToRgb(Buffer.from(png)); // mağaza uyumu: alfasız RGB
     const actual = readPngSize(buf);
     const ok = actual.width === target.width && actual.height === target.height;
     return { target, png: buf, actual, ok };

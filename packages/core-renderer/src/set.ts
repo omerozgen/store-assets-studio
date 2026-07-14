@@ -10,7 +10,7 @@
  *
  * İzomorfik: saf string üretir, node ve tarayıcıda aynı çalışır.
  */
-import type { Background } from "./index.ts";
+import { escapeHtml, backgroundCss, type Background } from "./util.ts";
 import { phoneMockupHtml, tabletMockupHtml, PHONE_ASPECT } from "@sas/device-frames";
 
 /**
@@ -100,20 +100,6 @@ export type RenderSetResult = {
 };
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function backgroundCss(bg: Background): string {
-  if (bg.type === "solid") return bg.color;
-  const angle = bg.angle ?? 135;
-  return `linear-gradient(${angle}deg, ${bg.colors.join(", ")})`;
-}
 
 /** Tema üzerine sığ+derin override uygular (galeriden seç → özelleştir). */
 export function mergeTheme(base: Theme, overrides?: DeepPartial<Theme>): Theme {

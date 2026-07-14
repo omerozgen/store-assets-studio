@@ -20,11 +20,23 @@ async function getBrowser() {
   return browser;
 }
 
+/** Base64 görsellerle büyük gövdeler normal; yine de bellek için üst sınır koy. */
+const MAX_BODY = 128 * 1024 * 1024; // 128 MB
+
 function readBody(req: import("node:http").IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
-    let d = "";
-    req.on("data", (c) => (d += c));
-    req.on("end", () => resolve(d));
+    let size = 0;
+    const parts: Buffer[] = [];
+    req.on("data", (c: Buffer) => {
+      size += c.length;
+      if (size > MAX_BODY) {
+        reject(Object.assign(new Error("İstek gövdesi çok büyük"), { statusCode: 413 }));
+        req.destroy();
+        return;
+      }
+      parts.push(c);
+    });
+    req.on("end", () => resolve(Buffer.concat(parts).toString("utf8")));
     req.on("error", reject);
   });
 }
@@ -37,7 +49,7 @@ const server = createServer(async (req, res) => {
 
   if (req.method === "POST" && req.url?.endsWith("/export")) {
     try {
-      const body = JSON.parse(await readBody(req)) as {
+      let body: {
         themeId: string;
         targetId?: string;
         targetIds?: string[];
@@ -46,6 +58,17 @@ const server = createServer(async (req, res) => {
         featureTitle?: string;
         iconSrc?: string;
       };
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch (e) {
+        const status = (e as { statusCode?: number }).statusCode ?? 400;
+        res.writeHead(status, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: (e as Error).message || "Geçersiz JSON" }));
+      }
+      if (!Array.isArray(body.panels)) {
+        res.writeHead(400, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "panels alanı (dizi) zorunlu" }));
+      }
       const theme = resolveTheme(body.themeId, body.overrides);
       const ids = body.targetIds?.length ? body.targetIds : [body.targetId ?? "ios-6.9"];
       const browser = await getBrowser();

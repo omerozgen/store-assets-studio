@@ -53,6 +53,11 @@ const EDGE_COLORS: Record<string, [string, string]> = {
   silver: ["#cfcfd5", "#74747c"],
 };
 
+/** Attribute bağlamı için kaçış (src/href). core-renderer'a bağımlılık kurmamak için yerel. */
+function escAttr(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
 function lerpHex(a: string, b: string, t: number): string {
   const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
   const pb = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
@@ -172,7 +177,7 @@ export function tabletMockupHtml(opts: TabletMockupOptions): string {
       background:${bodyGrad};box-shadow:inset 0 0 0 1px rgba(255,255,255,0.15);">
     <div style="position:absolute;inset:${railW}px;border-radius:${radius - railW}px;background:#050506;"></div>
     <div style="position:absolute;inset:${inset}px;border-radius:${screenR}px;overflow:hidden;background:#000;">
-      <img src="${screenshotSrc}" style="width:100%;height:100%;object-fit:cover;display:block;"/>
+      <img src="${escAttr(screenshotSrc)}" style="width:100%;height:100%;object-fit:cover;display:block;"/>
       <div style="position:absolute;inset:0;background:linear-gradient(120deg, rgba(255,255,255,0.14), rgba(255,255,255,0) 45%);"></div>
     </div>
     <!-- ön kamera (üst-orta) -->
@@ -208,10 +213,11 @@ export function phoneFrameSvg(opts: PhoneFrameOptions): string {
   // döndürülünce (phoneMockupHtml) içerik DÜZGÜN ve yatay görünür.
   const cx = sx + sw / 2,
     cy = sy + sh / 2;
+  const safeSrc = escAttr(screenshotSrc);
   const imageEl = opts.landscape
-    ? `<image href="${screenshotSrc}" x="${cx - sh / 2}" y="${cy - sw / 2}" width="${sh}" height="${sw}"
+    ? `<image href="${safeSrc}" x="${cx - sh / 2}" y="${cy - sw / 2}" width="${sh}" height="${sw}"
            preserveAspectRatio="xMidYMid slice" transform="rotate(-90 ${cx} ${cy})"/>`
-    : `<image href="${screenshotSrc}" x="${sx}" y="${sy}" width="${sw}" height="${sh}"
+    : `<image href="${safeSrc}" x="${sx}" y="${sy}" width="${sw}" height="${sh}"
            preserveAspectRatio="xMidYMid slice"/>`;
 
   return `<svg viewBox="${vb}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
