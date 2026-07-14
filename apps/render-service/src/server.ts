@@ -3,7 +3,14 @@
  * render edip panel dilimlerini base64 PNG olarak döndürür. Editördeki canlı
  * önizleme ile AYNI core-renderer çıktısı (WYSIWYG).
  *
- * Çalıştır:  pnpm export:serve   (port 8787)
+ * Çalıştır:  pnpm export:serve   (yerel: 8787; Cloud Run PORT env verir)
+ *
+ * Ortam değişkenleri (yayın):
+ *   PORT                    Cloud Run otomatik verir (varsayılan 8787)
+ *   RATE_LIMIT_PER_DAY      IP başına günlük export isteği (varsayılan 20; 0 = kapalı)
+ *   MAX_CONCURRENT_RENDERS  Eşzamanlı render (varsayılan 2)
+ *   ALLOWED_ORIGINS         Virgüllü CORS allowlist (varsayılan *; Hosting rewrite
+ *                           kullanılırsa aynı origin olur, CORS'a gerek kalmaz)
  */
 import { createServer } from "node:http";
 import { chromium, type Browser } from "playwright";
@@ -13,11 +20,58 @@ import { renderFeatureGraphicHtml, renderIconHtml, type Panel } from "@sas/core-
 import { logicalViewport } from "@sas/store-specs";
 import { renderSetToPngs, renderSingleToPng } from "./render-set.ts";
 
-const PORT = 8787;
+const PORT = Number(process.env.PORT ?? 8787);
+const RATE_LIMIT_PER_DAY = Number(process.env.RATE_LIMIT_PER_DAY ?? 20);
+const MAX_CONCURRENT = Math.max(1, Number(process.env.MAX_CONCURRENT_RENDERS ?? 2));
+const MAX_QUEUE = 10;
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? "*").split(",").map((s) => s.trim());
+
 let browser: Browser | null = null;
 async function getBrowser() {
   if (!browser) browser = await chromium.launch();
   return browser;
+}
+
+// ---- IP başına günlük rate limit (bellek içi; tek instance için doğru,
+// çoklu instance'ta yaklaşık — v2'de Firestore/Redis sayacına taşınır) ----
+const usage = new Map<string, { day: string; count: number }>();
+function clientIp(req: import("node:http").IncomingMessage): string {
+  const fwd = req.headers["x-forwarded-for"];
+  if (typeof fwd === "string" && fwd.length) return fwd.split(",")[0].trim();
+  return req.socket.remoteAddress ?? "unknown";
+}
+/** Limit aşıldıysa false; değilse sayacı artırır. */
+function checkRateLimit(ip: string): { ok: boolean; remaining: number } {
+  if (RATE_LIMIT_PER_DAY <= 0) return { ok: true, remaining: -1 };
+  const day = new Date().toISOString().slice(0, 10);
+  const u = usage.get(ip);
+  if (!u || u.day !== day) {
+    usage.set(ip, { day, count: 1 });
+    if (usage.size > 50_000) usage.clear(); // bellek emniyeti
+    return { ok: true, remaining: RATE_LIMIT_PER_DAY - 1 };
+  }
+  if (u.count >= RATE_LIMIT_PER_DAY) return { ok: false, remaining: 0 };
+  u.count++;
+  return { ok: true, remaining: RATE_LIMIT_PER_DAY - u.count };
+}
+
+// ---- Render kuyruğu (Chromium CPU-yoğun; aynı anda en fazla N render) ----
+let active = 0;
+const waiting: Array<() => void> = [];
+async function acquireSlot(): Promise<void> {
+  if (active < MAX_CONCURRENT) {
+    active++;
+    return;
+  }
+  if (waiting.length >= MAX_QUEUE) {
+    throw Object.assign(new Error("Sunucu yoğun, lütfen az sonra tekrar deneyin"), { statusCode: 429 });
+  }
+  await new Promise<void>((res) => waiting.push(res));
+  active++;
+}
+function releaseSlot() {
+  active--;
+  waiting.shift()?.();
 }
 
 /** Base64 görsellerle büyük gövdeler normal; yine de bellek için üst sınır koy. */
@@ -42,12 +96,27 @@ function readBody(req: import("node:http").IncomingMessage): Promise<string> {
 }
 
 const server = createServer(async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  const origin = req.headers.origin ?? "";
+  const allowOrigin = ALLOWED_ORIGINS.includes("*") ? "*" : ALLOWED_ORIGINS.includes(origin) ? origin : "";
+  if (allowOrigin) res.setHeader("Access-Control-Allow-Origin", allowOrigin);
   res.setHeader("Access-Control-Allow-Headers", "content-type");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   if (req.method === "OPTIONS") return res.writeHead(204).end();
 
+  // Cloud Run sağlık kontrolü
+  if (req.method === "GET" && req.url === "/healthz") {
+    res.writeHead(200, { "content-type": "text/plain" });
+    return res.end("ok");
+  }
+
   if (req.method === "POST" && req.url?.endsWith("/export")) {
+    // Rate limit (render'a hiç girmeden reddet)
+    const rl = checkRateLimit(clientIp(req));
+    if (rl.remaining >= 0) res.setHeader("X-RateLimit-Remaining", String(rl.remaining));
+    if (!rl.ok) {
+      res.writeHead(429, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "Günlük export limitine ulaşıldı. Yarın tekrar deneyin." }));
+    }
     try {
       let body: {
         themeId: string;
@@ -74,6 +143,9 @@ const server = createServer(async (req, res) => {
       const browser = await getBrowser();
       const title = body.featureTitle || body.panels[0]?.caption || "";
 
+      // Render kuyruğu: aynı anda en fazla MAX_CONCURRENT istek render eder.
+      await acquireSlot();
+      try {
       // Hedefler paralel render edilir (her biri kendi browser context'inde).
       const results = await Promise.all(
         ids.map(async (id) => {
@@ -106,9 +178,13 @@ const server = createServer(async (req, res) => {
       );
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ results }));
+      } finally {
+        releaseSlot();
+      }
     } catch (e) {
       console.error(e);
-      res.writeHead(500, { "content-type": "application/json" });
+      const status = (e as { statusCode?: number }).statusCode ?? 500;
+      res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: (e as Error).message }));
     }
     return;
@@ -117,4 +193,8 @@ const server = createServer(async (req, res) => {
   res.writeHead(404).end("not found");
 });
 
-server.listen(PORT, () => console.log(`Export sunucusu: http://localhost:${PORT}`));
+server.listen(PORT, () =>
+  console.log(
+    `Export sunucusu: http://localhost:${PORT} (limit: ${RATE_LIMIT_PER_DAY}/gün, eşzamanlı: ${MAX_CONCURRENT})`,
+  ),
+);
