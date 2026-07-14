@@ -41,6 +41,8 @@ export type Theme = {
     captionSizePct: number;
     weight: number;
     color: string;
+    /** Özel font dosyası (data URI) — verilirse @font-face olarak gömülür. */
+    customSrc?: string;
   };
   caption: { position: "top" | "bottom" };
   device: {
@@ -152,6 +154,20 @@ export function renderSet(
     deviceW = (dev.widthPct / 100) * W;
     deviceH = deviceW * PHONE_ASPECT;
   }
+  // Cihaz panele sığsın: yatay/geniş hedeflerde dikey telefon paneli taşırabilir.
+  const maxDevH = H * 0.82;
+  if (deviceH > maxDevH) {
+    const k = maxDevH / deviceH;
+    deviceW *= k;
+    deviceH *= k;
+  }
+
+  // Font adındaki çift tırnak ("Segoe UI") inline style attribute'unu kırar ve
+  // sonraki tüm CSS özellikleri sessizce düşer → tek tırnağa çevir.
+  const fontFamily = theme.font.family.replace(/"/g, "'");
+  const fontFace = theme.font.customSrc
+    ? `@font-face{font-family:'SASCustom';src:url("${theme.font.customSrc.replace(/"/g, "")}");font-display:block;}`
+    : "";
 
   // Dekor katmanı (blob / circle / ring / stripe / dots) — tuval geneline yayılır.
   const decorHtml = (theme.decor ?? [])
@@ -235,7 +251,7 @@ export function renderSet(
       const captionHtml = p.caption
         ? `<div style="position:absolute;left:${capLeft}px;top:${capTop}px;width:${W * 0.86}px;transform:${capTransform};
             color:${theme.font.color};font-size:${capSize}px;font-weight:${theme.font.weight};
-            font-family:${theme.font.family};line-height:1.12;text-align:center;text-wrap:balance;
+            font-family:${fontFamily};line-height:1.12;text-align:center;text-wrap:balance;
             z-index:3;text-shadow:0 ${H * 0.004}px ${H * 0.02}px rgba(0,0,0,0.25);">${escapeHtml(p.caption)}</div>`
         : "";
 
@@ -271,6 +287,7 @@ export function renderSet(
 <head>
 <meta charset="utf-8" />
 <style>
+  ${fontFace}
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   .canvas {
@@ -279,7 +296,7 @@ export function renderSet(
     height: ${H}px;
     background: ${bg};
     overflow: hidden;
-    font-family: ${theme.font.family};
+    font-family: ${fontFamily};
   }
 </style>
 </head>

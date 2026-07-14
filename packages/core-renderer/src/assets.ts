@@ -5,12 +5,19 @@
 import { phoneMockupHtml } from "@sas/device-frames";
 import type { Theme } from "./set.ts";
 import { escapeHtml as esc, backgroundCss as bgCss, type Background } from "./util.ts";
-function doc(w: number, h: number, inner: string, font: string): string {
+function doc(w: number, h: number, inner: string, font: string, fontFace = ""): string {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    ${fontFace}
     *{margin:0;padding:0;box-sizing:border-box}
     html,body{margin:0;padding:0}
-    .c{position:relative;width:${w}px;height:${h}px;overflow:hidden;font-family:${font}}
+    .c{position:relative;width:${w}px;height:${h}px;overflow:hidden;font-family:${font.replace(/"/g, "'")}}
   </style></head><body><div class="c">${inner}</div></body></html>`;
+}
+
+function fontFaceCss(customSrc?: string): string {
+  return customSrc
+    ? `@font-face{font-family:'SASCustom';src:url("${customSrc.replace(/"/g, "")}");font-display:block;}`
+    : "";
 }
 
 /**
@@ -46,7 +53,7 @@ export function renderFeatureGraphicHtml(
         thicknessPct: 8,
       })}
     </div>`;
-  return doc(W, H, inner, theme.font.family);
+  return doc(W, H, inner, theme.font.family, fontFaceCss(theme.font.customSrc));
 }
 
 /**

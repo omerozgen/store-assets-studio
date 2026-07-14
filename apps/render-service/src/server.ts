@@ -74,34 +74,36 @@ const server = createServer(async (req, res) => {
       const browser = await getBrowser();
       const title = body.featureTitle || body.panels[0]?.caption || "";
 
-      const results = [];
-      for (const id of ids) {
-        const target = getTarget(id);
-        let panelsOut;
-        if (target.assetType === "feature-graphic") {
-          const html = renderFeatureGraphicHtml(
-            theme,
-            { title, screenshotSrc: body.panels[0]?.screenshotSrc ?? "" },
-            logicalViewport(target),
-          );
-          panelsOut = [await renderSingleToPng(browser, html, target)];
-        } else if (target.assetType === "icon") {
-          const html = renderIconHtml(
-            { src: body.iconSrc, letter: (title || "A").trim().charAt(0).toUpperCase(), background: theme.background, color: theme.font.color, fontFamily: theme.font.family },
-            logicalViewport(target),
-          );
-          panelsOut = [await renderSingleToPng(browser, html, target)];
-        } else {
-          panelsOut = (await renderSetToPngs(browser, theme, body.panels, target)).panels;
-        }
-        const allOk = panelsOut.every((p) => p.ok);
-        results.push({
-          target: { id: target.id, store: target.store, assetType: target.assetType, width: target.width, height: target.height },
-          panels: panelsOut.map((p) => ({ index: p.index, base64: p.png.toString("base64"), ok: p.ok })),
-          allOk,
-        });
-        console.log(`export: ${target.id} (${target.assetType}) × ${panelsOut.length} → ${allOk ? "OK" : "BOYUT HATASI"}`);
-      }
+      // Hedefler paralel render edilir (her biri kendi browser context'inde).
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          const target = getTarget(id);
+          let panelsOut;
+          if (target.assetType === "feature-graphic") {
+            const html = renderFeatureGraphicHtml(
+              theme,
+              { title, screenshotSrc: body.panels[0]?.screenshotSrc ?? "" },
+              logicalViewport(target),
+            );
+            panelsOut = [await renderSingleToPng(browser, html, target)];
+          } else if (target.assetType === "icon") {
+            const html = renderIconHtml(
+              { src: body.iconSrc, letter: (title || "A").trim().charAt(0).toUpperCase(), background: theme.background, color: theme.font.color, fontFamily: theme.font.family },
+              logicalViewport(target),
+            );
+            panelsOut = [await renderSingleToPng(browser, html, target)];
+          } else {
+            panelsOut = (await renderSetToPngs(browser, theme, body.panels, target)).panels;
+          }
+          const allOk = panelsOut.every((p) => p.ok);
+          console.log(`export: ${target.id} (${target.assetType}) × ${panelsOut.length} → ${allOk ? "OK" : "BOYUT HATASI"}`);
+          return {
+            target: { id: target.id, store: target.store, assetType: target.assetType, width: target.width, height: target.height },
+            panels: panelsOut.map((p) => ({ index: p.index, base64: p.png.toString("base64"), ok: p.ok })),
+            allOk,
+          };
+        }),
+      );
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ results }));
     } catch (e) {

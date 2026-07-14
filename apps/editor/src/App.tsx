@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import JSZip from "jszip";
 import { renderSet, placeholderScreenshot, type Panel } from "@sas/core-renderer";
 import { THEMES, resolveTheme } from "@sas/themes";
@@ -49,6 +49,73 @@ const ASSET_LABEL: Record<string, string> = {
   icon: "İkon",
 };
 
+// ---- IndexedDB otokayıt (localStorage 5MB'a sığmaz; görseller data URI) ----
+function idbOpen(): Promise<IDBDatabase> {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("sas-editor", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("kv");
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function idbSet(key: string, val: unknown): Promise<void> {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction("kv", "readwrite");
+    tx.objectStore("kv").put(val, key);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+async function idbGet<T>(key: string): Promise<T | undefined> {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const rq = db.transaction("kv").objectStore("kv").get(key);
+    rq.onsuccess = () => res(rq.result as T | undefined);
+    rq.onerror = () => rej(rq.error);
+  });
+}
+async function idbDel(key: string): Promise<void> {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction("kv", "readwrite");
+    tx.objectStore("kv").delete(key);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+
+/** Kaydedilen/yüklenen proje şeması (undo geçmişi de aynı yapıyı kullanır). */
+type ProjectState = {
+  version: 1;
+  panels: EditorPanel[];
+  themeId: string;
+  finish: Finish;
+  pose: Pose;
+  orientation: "portrait" | "landscape";
+  tiltDeg: number;
+  leanDeg: number;
+  thickness: number;
+  arrangement: "" | "centered" | "cascade" | "straddle";
+  captionPos: "top" | "bottom";
+  locales: string[];
+  locale: string;
+  targetId: string;
+  exportTargets: string[];
+  featureTitle: string;
+  iconSrc: string;
+  format: "png" | "jpeg" | "webp";
+  quality: number;
+  layout: "simple" | "fastlane";
+  fontSrc: string;
+  fontName: string;
+  useBrandBg: boolean;
+  bgA: string;
+  bgB: string;
+  useTextColor: boolean;
+  textColor: string;
+};
+
 export function App() {
   const [locales, setLocales] = useState<string[]>(["tr"]);
   const [locale, setLocale] = useState("tr");
@@ -72,19 +139,120 @@ export function App() {
   const [iconSrc, setIconSrc] = useState("");
   const [format, setFormat] = useState<"png" | "jpeg" | "webp">("png");
   const [quality, setQuality] = useState(0.9);
+  const [layout, setLayout] = useState<"simple" | "fastlane">("simple");
+  const [fontSrc, setFontSrc] = useState("");
+  const [fontName, setFontName] = useState("");
+  const [useBrandBg, setUseBrandBg] = useState(false);
+  const [bgA, setBgA] = useState("#4f46e5");
+  const [bgB, setBgB] = useState("#db2777");
+  const [useTextColor, setUseTextColor] = useState(false);
+  const [textColor, setTextColor] = useState("#ffffff");
   const [dragOver, setDragOver] = useState(false);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [exporting, setExporting] = useState<string | null>(null);
+  const [sel, setSel] = useState<{ kind: "cap" | "dev"; i: number } | null>(null);
 
   const target = getTarget(targetId);
 
   const deviceOverride = { finish, pose, tiltDeg, leanDeg, thicknessPct: thickness, orientation, ...(arrangement ? { arrangement } : {}) };
-  const overrides = { caption: { position: captionPos }, device: deviceOverride };
+  const overrides = {
+    caption: { position: captionPos },
+    device: deviceOverride,
+    ...(useBrandBg ? { background: { type: "gradient" as const, colors: [bgA, bgB], angle: 135 } } : {}),
+    font: {
+      ...(fontSrc ? { family: "'SASCustom', -apple-system, sans-serif", customSrc: fontSrc } : {}),
+      ...(useTextColor ? { color: textColor } : {}),
+    },
+  };
 
   const theme = useMemo(
     () => resolveTheme(themeId, overrides),
-    [themeId, finish, pose, tiltDeg, leanDeg, thickness, captionPos, arrangement, orientation],
+    [themeId, finish, pose, tiltDeg, leanDeg, thickness, captionPos, arrangement, orientation,
+     useBrandBg, bgA, bgB, useTextColor, textColor, fontSrc],
   );
+
+  // ---- Proje durumu: topla / uygula ----
+  function collectProject(): ProjectState {
+    return {
+      version: 1, panels, themeId, finish, pose, orientation, tiltDeg, leanDeg, thickness,
+      arrangement, captionPos, locales, locale, targetId, exportTargets, featureTitle,
+      iconSrc, format, quality, layout, fontSrc, fontName, useBrandBg, bgA, bgB,
+      useTextColor, textColor,
+    };
+  }
+  function applyProject(p: ProjectState) {
+    setPanels(p.panels.map((x) => ({ ...x, id: uid() }))); // id çakışmasın
+    setThemeId(p.themeId); setFinish(p.finish); setPose(p.pose); setOrientation(p.orientation);
+    setTiltDeg(p.tiltDeg); setLeanDeg(p.leanDeg); setThickness(p.thickness);
+    setArrangement(p.arrangement); setCaptionPos(p.captionPos);
+    setLocales(p.locales); setLocale(p.locale); setTargetId(p.targetId);
+    setExportTargets(p.exportTargets); setFeatureTitle(p.featureTitle); setIconSrc(p.iconSrc);
+    setFormat(p.format); setQuality(p.quality); setLayout(p.layout);
+    setFontSrc(p.fontSrc); setFontName(p.fontName);
+    setUseBrandBg(p.useBrandBg); setBgA(p.bgA); setBgB(p.bgB);
+    setUseTextColor(p.useTextColor); setTextColor(p.textColor);
+  }
+
+  // ---- Otokayıt (IndexedDB) + açılışta geri yükleme ----
+  const restoredRef = useRef(false);
+  const applyingRef = useRef(false);
+  useEffect(() => {
+    idbGet<ProjectState>("project")
+      .then((p) => {
+        if (p && p.version === 1) {
+          applyingRef.current = true;
+          applyProject(p);
+        }
+      })
+      .catch(() => {})
+      .finally(() => { restoredRef.current = true; });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (!restoredRef.current) return;
+    const t = setTimeout(() => { idbSet("project", collectProject()).catch(() => {}); }, 800);
+    return () => clearTimeout(t);
+  }); // her state değişiminde debounce'lı kaydet
+
+  // ---- Undo/redo (⌘/Ctrl+Z, ⇧ ile redo) ----
+  const hist = useRef<{ past: string[]; future: string[] }>({ past: [], future: [] });
+  useEffect(() => {
+    if (!restoredRef.current) return;
+    const t = setTimeout(() => {
+      const snap = JSON.stringify(collectProject());
+      const { past } = hist.current;
+      if (applyingRef.current) {
+        // Geri yükleme / undo / redo sonrası: durumu baseline olarak kaydet,
+        // future'ı KORU (redo çalışsın). Dedupe zaten çift kaydı engeller.
+        applyingRef.current = false;
+        if (past[past.length - 1] !== snap) {
+          past.push(snap);
+          if (past.length > 20) past.shift();
+        }
+        return;
+      }
+      if (past[past.length - 1] !== snap) {
+        past.push(snap);
+        if (past.length > 20) past.shift();
+        hist.current.future = [];
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  });
+  function undo() {
+    const h = hist.current;
+    if (h.past.length < 2) return;
+    h.future.push(h.past.pop()!);
+    applyingRef.current = true;
+    applyProject(JSON.parse(h.past[h.past.length - 1]));
+  }
+  function redo() {
+    const nxt = hist.current.future.pop();
+    if (!nxt) return;
+    hist.current.past.push(nxt);
+    applyingRef.current = true;
+    applyProject(JSON.parse(nxt));
+  }
 
   // Panellerin aktif dildeki hâli (önizleme). Boş görüntüler placeholder ile.
   const localePanels = (loc: string): Panel[] =>
@@ -199,11 +367,80 @@ export function App() {
     y: p.capY ?? defaultCapY,
   }));
 
+  // ---- Klavye: ⌘/Ctrl+Z undo, ⇧⌘Z redo; seçili tutamağı ok tuşlarıyla it ----
+  useEffect(() => {
+    const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        e.shiftKey ? redo() : undo();
+        return;
+      }
+      // Ok tuşları: bir input'a yazarken karışma.
+      if (mod || !sel || (e.target instanceof HTMLElement && /input|textarea|select/i.test(e.target.tagName))) return;
+      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+      e.preventDefault();
+      const step = e.shiftKey ? 0.02 : 0.005;
+      const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+      const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+      if (sel.kind === "cap") {
+        const c = caps[sel.i];
+        if (c) setCapPos(sel.i, clamp(c.x + dx, 0.06, 0.94), clamp(c.y + dy, 0.02, 0.95));
+      } else {
+        const d = deviceCenters[sel.i];
+        if (d) setDevPos(sel.i, clamp(d.x + dx, -0.1, 1.1), clamp(d.y + dy, 0.1, 0.95));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  // ---- Proje dosyası: indir / yükle / sıfırla ----
+  function saveProjectFile() {
+    const blob = new Blob([JSON.stringify(collectProject(), null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "store-assets-proje.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+  async function loadProjectFile(f: File) {
+    try {
+      const p = JSON.parse(await f.text()) as ProjectState;
+      if (p.version !== 1) throw new Error("Desteklenmeyen proje sürümü");
+      applyingRef.current = true;
+      applyProject(p);
+    } catch (e) {
+      alert("Proje yüklenemedi: " + (e as Error).message);
+    }
+  }
+  async function resetProject() {
+    if (!confirm("Proje sıfırlansın mı? (otokayıt silinir)")) return;
+    await idbDel("project").catch(() => {});
+    location.reload();
+  }
+
+  // ---- Zip yol düzeni: basit veya fastlane (deliver/supply) ----
+  function zipPath(loc: string, t: { id: string; store: string; assetType: string }, idx: number, ext: string): string {
+    if (layout === "simple") return `${loc}/${t.store}/${t.id}/${idx + 1}.${ext}`;
+    if (t.store === "app-store") {
+      if (t.assetType === "icon") return `extras/ios-app-icon-1024.${ext}`; // deliver'a girmez; binary'de gider
+      return `fastlane/screenshots/${loc}/${idx + 1}_${t.id}.${ext}`;
+    }
+    if (t.assetType === "icon") return `fastlane/metadata/android/${loc}/images/icon.${ext}`;
+    if (t.assetType === "feature-graphic") return `fastlane/metadata/android/${loc}/images/featureGraphic.${ext}`;
+    const dir = t.id.includes("tablet") ? "tenInchScreenshots" : "phoneScreenshots";
+    return `fastlane/metadata/android/${loc}/images/${dir}/${idx + 1}.${ext}`;
+  }
+
   // --- export (dil × hedef) ---
   async function doExport() {
     if (!exportTargets.length) return alert("En az bir export hedefi seç.");
     try {
       const zip = new JSZip();
+      const readmeRows: string[] = [];
       let n = 0;
       for (const loc of locales) {
         setExporting(`${loc.toUpperCase()} render ediliyor… (${++n}/${locales.length})`);
@@ -228,20 +465,37 @@ export function App() {
         });
         if (!res.ok) throw new Error(`Sunucu ${res.status}`);
         const data = (await res.json()) as {
-          results: { target: { id: string; store: string }; panels: { index: number; base64: string }[] }[];
+          results: {
+            target: { id: string; store: string; assetType: string; width: number; height: number };
+            panels: { index: number; base64: string }[];
+          }[];
         };
         const { mime, ext } = FORMATS[format];
         for (const r of data.results) {
-          const folder = zip.folder(`${loc}/${r.target.store}/${r.target.id}`)!;
           for (const p of r.panels) {
-            if (format === "png") {
-              folder.file(`${p.index + 1}.png`, p.base64, { base64: true });
-            } else {
-              folder.file(`${p.index + 1}.${ext}`, await convertPng(p.base64, mime, quality));
-            }
+            const path = zipPath(loc, r.target, p.index, ext);
+            if (format === "png") zip.file(path, p.base64, { base64: true });
+            else zip.file(path, await convertPng(p.base64, mime, quality));
+            readmeRows.push(`${path}  —  ${r.target.width}×${r.target.height}  (${r.target.id}, ${loc})`);
           }
         }
       }
+      zip.file(
+        "README.txt",
+        [
+          "Store Assets Studio export",
+          `Tarih: ${new Date().toISOString()}`,
+          `Düzen: ${layout === "fastlane" ? "fastlane (deliver/supply)" : "basit"}  ·  Format: ${format.toUpperCase()}`,
+          "",
+          "Dosyalar:",
+          ...readmeRows,
+          "",
+          "Notlar:",
+          "- PNG çıktıları 24-bit RGB (alfasız) — App Store/Play gereksinimi.",
+          "- Play Console dil kodları bölgeli olabilir (ör. tr → tr-TR); klasörü gerekirse yeniden adlandırın.",
+          "- Mağaza yüklemeleri için PNG önerilir; JPG/WEBP web/pazarlama içindir.",
+        ].join("\n"),
+      );
       setExporting("Zip hazırlanıyor…");
       const blob = await zip.generateAsync({ type: "blob" });
       const url = URL.createObjectURL(blob);
@@ -261,6 +515,19 @@ export function App() {
     <div className="app">
       <aside className="sidebar">
         <h1>Store Assets Studio</h1>
+
+        <section>
+          <label className="lbl">Proje</label>
+          <div className="prow">
+            <button onClick={saveProjectFile}>İndir (.json)</button>
+            <label className="prowbtn">
+              Yükle
+              <input type="file" accept=".json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) loadProjectFile(f); e.target.value = ""; }} />
+            </label>
+            <button onClick={resetProject}>Sıfırla</button>
+          </div>
+          <p className="note">Otokayıt açık (bu tarayıcıda). Geri al: ⌘/Ctrl+Z · Yinele: ⇧+⌘/Ctrl+Z · Seçili tutamağı ok tuşlarıyla it (⇧ = büyük adım).</p>
+        </section>
 
         <section>
           <label className="lbl">Önizleme hedefi</label>
@@ -407,6 +674,47 @@ export function App() {
           <button className="add" onClick={addEmpty}>+ Panel ekle</button>
         </section>
 
+        <section>
+          <label className="lbl">Marka</label>
+          <label className="filebtn">
+            {fontName ? `✓ Font: ${fontName} — değiştir` : "Font yükle (ttf/otf/woff/woff2)"}
+            <input
+              type="file"
+              accept=".ttf,.otf,.woff,.woff2"
+              hidden
+              onChange={async (e) => {
+                const f = e.target.files?.[0];
+                if (f) { setFontSrc(await readFile(f)); setFontName(f.name); }
+                e.target.value = "";
+              }}
+            />
+          </label>
+          {fontName && <button className="add" onClick={() => { setFontSrc(""); setFontName(""); }}>Fontu kaldır</button>}
+          <label className="chk">
+            <input type="checkbox" checked={useBrandBg} onChange={(e) => setUseBrandBg(e.target.checked)} />
+            Marka arka planı (gradient)
+          </label>
+          {useBrandBg && (
+            <div className="grid2">
+              <input type="color" value={bgA} onChange={(e) => setBgA(e.target.value)} title="Renk 1" />
+              <input type="color" value={bgB} onChange={(e) => setBgB(e.target.value)} title="Renk 2" />
+            </div>
+          )}
+          <label className="chk">
+            <input type="checkbox" checked={useTextColor} onChange={(e) => setUseTextColor(e.target.checked)} />
+            Metin rengi
+          </label>
+          {useTextColor && <input type="color" value={textColor} onChange={(e) => setTextColor(e.target.value)} />}
+        </section>
+
+        <section>
+          <label className="lbl">Klasör düzeni (zip)</label>
+          <select value={layout} onChange={(e) => setLayout(e.target.value as "simple" | "fastlane")}>
+            <option value="simple">Basit (dil/mağaza/hedef)</option>
+            <option value="fastlane">Fastlane (deliver + supply)</option>
+          </select>
+        </section>
+
         <section className="grid2">
           <div>
             <label className="lbl">Format</label>
@@ -445,6 +753,7 @@ export function App() {
           onCaptionMove={setCapPos}
           onDeviceMove={setDevPos}
           onDropImage={setPanelImage}
+          onSelect={setSel}
         />
       </main>
     </div>
@@ -462,6 +771,7 @@ function Preview({
   onCaptionMove,
   onDeviceMove,
   onDropImage,
+  onSelect,
 }: {
   wideHtml: string;
   viewport: { width: number; height: number };
@@ -471,6 +781,7 @@ function Preview({
   onCaptionMove: (i: number, x: number, y: number) => void;
   onDeviceMove: (i: number, x: number, y: number) => void;
   onDropImage: (i: number, file: File) => void;
+  onSelect: (s: { kind: "cap" | "dev"; i: number }) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -516,21 +827,43 @@ function Preview({
 
   const isDrag = (kind: "cap" | "dev", i: number) => dragging?.kind === kind && dragging.i === i;
 
+  // Çift-buffer: yeni HTML arkadaki iframe'e yazılır, YÜKLENİNCE öne alınır →
+  // sürükleme/ayar değişiminde beyaz flaş (flicker) olmaz.
+  const [bufs, setBufs] = useState<[string, string]>([wideHtml, ""]);
+  const frontRef = useRef(0);
+  const [front, setFront] = useState(0);
+  useEffect(() => {
+    setBufs((prev) => {
+      const back = 1 - frontRef.current;
+      const next: [string, string] = [prev[0], prev[1]];
+      next[back] = wideHtml;
+      return next;
+    });
+  }, [wideHtml]);
+  const onBufLoad = (idx: number) => {
+    if (idx !== frontRef.current && bufs[idx]) {
+      frontRef.current = idx;
+      setFront(idx);
+    }
+  };
+  const iframeStyle = (idx: number): CSSProperties => ({
+    position: "absolute",
+    left: 0,
+    top: 0,
+    width: viewport.width,
+    height: viewport.height,
+    transform: `scale(${scale})`,
+    transformOrigin: "top left",
+    border: "none",
+    pointerEvents: "none", // önizleme etkileşimsiz; tutamaklar üstte
+    visibility: front === idx ? "visible" : "hidden",
+  });
+
   return (
     <div className="stage" ref={wrapRef}>
       <div className="canvasBox" ref={boxRef} style={{ width: viewport.width * scale, height: viewport.height * scale }}>
-        <iframe
-          title="preview"
-          srcDoc={wideHtml}
-          style={{
-            width: viewport.width,
-            height: viewport.height,
-            transform: `scale(${scale})`,
-            transformOrigin: "top left",
-            border: "none",
-            pointerEvents: dragging ? "none" : "auto", // sürüklerken olaylar üst pencereye geçsin
-          }}
-        />
+        <iframe title="preview-a" srcDoc={bufs[0]} style={iframeStyle(0)} onLoad={() => onBufLoad(0)} />
+        <iframe title="preview-b" srcDoc={bufs[1]} style={iframeStyle(1)} onLoad={() => onBufLoad(1)} />
         {/* Panel başına dosya bırakma bölgeleri (telefona doğrudan görsel at) */}
         {Array.from({ length: panelCount }, (_, i) => (
           <div
@@ -558,8 +891,8 @@ function Preview({
             key={"dev" + i}
             className={"devHandle " + (isDrag("dev", i) ? "on" : "")}
             style={{ left: ((i + d.x) / panelCount) * 100 + "%", top: d.y * 100 + "%" }}
-            onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "dev", i }); }}
-            title="Sürükleyerek telefonu taşı"
+            onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "dev", i }); onSelect({ kind: "dev", i }); }}
+            title="Sürükleyerek telefonu taşı (ok tuşlarıyla ince ayar)"
           >
             ✥
           </div>
@@ -571,8 +904,8 @@ function Preview({
               key={i}
               className={"capHandle " + (isDrag("cap", i) ? "on" : "")}
               style={{ left: ((i + c.x) / panelCount) * 100 + "%", top: c.y * 100 + "%" }}
-              onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "cap", i }); }}
-              title="Sürükleyerek başlığı taşı"
+              onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "cap", i }); onSelect({ kind: "cap", i }); }}
+              title="Sürükleyerek başlığı taşı (ok tuşlarıyla ince ayar)"
             >
               <span>⠿ {c.text}</span>
             </div>

@@ -5,8 +5,9 @@
  */
 import { mergeTheme, type Theme } from "@sas/core-renderer";
 
+// Not: tek tırnak — çift tırnak inline style attribute'larını kırar.
 const SANS =
-  '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+  "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 
 export const THEMES: readonly Theme[] = [
   {

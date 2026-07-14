@@ -40,6 +40,7 @@ export async function renderSetToPngs(
   try {
     const page = await context.newPage();
     await page.setContent(wideHtml, { waitUntil: "networkidle" });
+    await page.evaluate(() => document.fonts.ready); // özel @font-face yüklensin
 
     // Mağaza uyumu: Playwright RGBA üretir; Apple/Google alfasız (24-bit RGB) ister.
     // Süreklilik testi ikisini karşılaştırdığı için tam tuval de düzleştirilir.
@@ -78,6 +79,7 @@ export async function renderSingleToPng(
   try {
     const page = await context.newPage();
     await page.setContent(html, { waitUntil: "networkidle" });
+    await page.evaluate(() => document.fonts.ready); // özel @font-face yüklensin
     const png = flattenPngToRgb(Buffer.from(await page.screenshot({ type: "png" })));
     const actual = readPngSize(png);
     return { index: 0, png, actual, ok: actual.width === target.width && actual.height === target.height };
