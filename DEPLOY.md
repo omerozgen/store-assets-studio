@@ -1,10 +1,30 @@
-# Yayına Alma — Firebase Hosting + Cloud Run
+# Yayına Alma
+
+Giriş yok; koruma **IP başına günlük rate limit + render kuyruğu** ile.
+
+## Yol A — Tamamen web arayüzüyle (önerilen, CLI gerekmez)
+
+Tek Cloud Run servisi hem editörü (statik build, Dockerfile içinde derlenir)
+hem `/api`'yi sunar. GitHub repo'su bağlanır → her push otomatik deploy.
+
+1. **Faturalama:** [console.cloud.google.com](https://console.cloud.google.com)
+   → proje seç/oluştur → Billing → hesap bağla (Firebase tarafında Blaze'e denk).
+2. **Cloud Run → Create Service** → "Continuously deploy from a repository"
+   → Set up with Cloud Build → GitHub'ı yetkilendir → `store-assets-studio`
+   repo'su, branch `main`, Build type: **Dockerfile** (`/Dockerfile`).
+3. Servis ayarları: Region `europe-west1` · Authentication: **Allow
+   unauthenticated** · Container: Memory **2 GiB**, CPU **2** · Max instances
+   **3** · Environment variables: `RATE_LIMIT_PER_DAY=20`,
+   `MAX_CONCURRENT_RENDERS=2` → **Create**.
+4. Build bitince (~5-8 dk) çıkan `https://…run.app` adresi = siten. Sonraki
+   her `git push` otomatik yayınlanır.
+5. Özel alan adı: Cloud Run → Manage custom domains (web arayüzünden).
+
+## Yol B — CLI ile (Firebase Hosting + Cloud Run, ayrık)
 
 Mimari: **Editör** (statik, Vite build) → Firebase Hosting. **Render servisi**
 (Playwright/Chromium) → Cloud Run. Hosting, `/api/**` isteklerini Cloud Run'a
 rewrite eder → editör ve API aynı origin'de çalışır (CORS derdi yok).
-
-Giriş yok; koruma **IP başına günlük rate limit + render kuyruğu** ile.
 
 ## Ön koşullar (bir kez)
 

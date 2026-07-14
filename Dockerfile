@@ -11,9 +11,12 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json tsconfig.json ./
 COPY packages ./packages
 COPY apps/render-service ./apps/render-service
+COPY apps/editor ./apps/editor
 
-# Sadece render-service ve bağımlılıkları
-RUN pnpm install --frozen-lockfile --filter @sas/render-service...
+RUN pnpm install --frozen-lockfile
+
+# Editörü build et — server, dist'i statik olarak sunar (tek servis)
+RUN pnpm --filter @sas/editor build
 
 # Chromium + sistem bağımlılıkları
 RUN pnpm --filter @sas/render-service exec playwright install --with-deps chromium

@@ -13,6 +13,10 @@
  *                           kullanılırsa aynı origin olur, CORS'a gerek kalmaz)
  */
 import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { join, normalize, extname, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium, type Browser } from "playwright";
 import { resolveTheme } from "@sas/themes";
 import { getTarget } from "@sas/store-specs";
@@ -30,6 +34,40 @@ let browser: Browser | null = null;
 async function getBrowser() {
   if (!browser) browser = await chromium.launch();
   return browser;
+}
+
+// ---- Statik editör sunumu (tek-servis deploy: editör build'i varsa buradan servis edilir) ----
+const STATIC_DIR =
+  process.env.STATIC_DIR ?? join(dirname(fileURLToPath(import.meta.url)), "..", "..", "editor", "dist");
+const HAS_STATIC = existsSync(join(STATIC_DIR, "index.html"));
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript",
+  ".css": "text/css",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+  ".json": "application/json",
+  ".woff2": "font/woff2",
+};
+async function serveStatic(url: string, res: import("node:http").ServerResponse): Promise<boolean> {
+  if (!HAS_STATIC) return false;
+  const path = normalize((url.split("?")[0] || "/")).replace(/^\/+/, "");
+  let file = join(STATIC_DIR, path === "" ? "index.html" : path);
+  if (!file.startsWith(STATIC_DIR)) return false; // path traversal koruması
+  if (!existsSync(file)) file = join(STATIC_DIR, "index.html"); // SPA fallback
+  try {
+    const data = await readFile(file);
+    const immutable = path.startsWith("assets/");
+    res.writeHead(200, {
+      "content-type": MIME[extname(file)] ?? "application/octet-stream",
+      "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-cache",
+    });
+    res.end(data);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ---- IP başına günlük rate limit (bellek içi; tek instance için doğru,
@@ -107,6 +145,11 @@ const server = createServer(async (req, res) => {
   if (req.method === "GET" && req.url === "/healthz") {
     res.writeHead(200, { "content-type": "text/plain" });
     return res.end("ok");
+  }
+
+  // Editör (statik build) — /api dışındaki GET'ler
+  if (req.method === "GET" && !req.url?.startsWith("/api")) {
+    if (await serveStatic(req.url ?? "/", res)) return;
   }
 
   if (req.method === "POST" && req.url?.endsWith("/export")) {
