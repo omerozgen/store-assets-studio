@@ -72,6 +72,8 @@ export type Theme = {
 
 /** Serbest metin kutusu — başlıktan bağımsız, panele istenildiği kadar eklenir. */
 export type TextBox = {
+  /** Kararlı kimlik — canlı sürükleme (postMessage) için DOM id'sine yazılır. */
+  id?: string;
   text: string;
   /** Panel oranı (0..1): x = metnin yatay MERKEZİ, y = üst kenarı. */
   xFrac: number;
@@ -106,8 +108,13 @@ export type ScreenshotSet = {
 export type Rect = { x: number; y: number; width: number; height: number };
 
 export type RenderSetResult = {
-  /** Tam HTML belgesi (geniş tuval). */
+  /** Tam HTML belgesi (geniş tuval) — export/Playwright bunu kullanır. */
   wideHtml: string;
+  /** Yalnız tuval parçası (<div class="canvas">…) — editörün KALICI önizleme
+   *  belgesine postMessage ile enjekte edilir; belge yeniden yüklenmez. */
+  canvasHtml: string;
+  /** Tuvalin CSS'i (wideHtml'dekiyle birebir aynı) — WYSIWYG korunur. */
+  css: string;
   /** Mantıksal viewport (Playwright'a verilir). */
   viewport: { width: number; height: number };
   /** Panel başına dilim dikdörtgeni (mantıksal koordinat). */
@@ -264,7 +271,7 @@ export function renderSet(
       const capTransform = hasPos ? "translateX(-50%)" : "none";
 
       const captionHtml = p.caption
-        ? `<div style="position:absolute;left:${capLeft}px;top:${capTop}px;width:${W * 0.86}px;transform:${capTransform};
+        ? `<div id="cap-${i}" style="position:absolute;left:${capLeft}px;top:${capTop}px;width:${W * 0.86}px;transform:${capTransform};
             color:${theme.font.color};font-size:${capSize}px;font-weight:${theme.font.weight};
             font-family:${fontFamily};line-height:1.12;text-align:center;text-wrap:balance;
             z-index:3;text-shadow:0 ${H * 0.004}px ${H * 0.02}px rgba(0,0,0,0.25);">${escapeHtml(p.caption)}</div>`
@@ -285,7 +292,7 @@ export function renderSet(
       const mockup = isTablet
         ? tabletMockupHtml({ ...common, thicknessPct: dev.thicknessPct ?? 6 })
         : phoneMockupHtml({ ...common, thicknessPct: dev.thicknessPct ?? 8, landscape });
-      const deviceHtml = `<div style="position:absolute;left:${deviceLeft}px;top:${deviceTop}px;
+      const deviceHtml = `<div id="dev-${i}" style="position:absolute;left:${deviceLeft}px;top:${deviceTop}px;
           width:${deviceW}px;height:${deviceH}px;perspective:${deviceW * 4}px;z-index:2;">
           <div style="position:absolute;left:4%;top:74%;width:92%;height:22%;
             background:radial-gradient(50% 50% at 50% 50%, rgba(0,0,0,0.55), rgba(0,0,0,0));
@@ -298,7 +305,8 @@ export function renderSet(
         .filter((t) => t.text)
         .map((t) => {
           const size = ((t.sizePct ?? 3.2) / 100) * H;
-          return `<div style="position:absolute;left:${i * W + t.xFrac * W}px;top:${t.yFrac * H}px;
+          const tid = t.id ? `id="txt-${String(t.id).replace(/[^a-zA-Z0-9_-]/g, "")}" ` : "";
+          return `<div ${tid}style="position:absolute;left:${i * W + t.xFrac * W}px;top:${t.yFrac * H}px;
             transform:translateX(-50%);max-width:${W * 0.9}px;color:${t.color ?? theme.font.color};
             font-size:${size}px;font-weight:${t.weight ?? 600};font-family:${fontFamily};
             line-height:1.25;text-align:center;white-space:pre-wrap;z-index:3;
@@ -310,11 +318,7 @@ export function renderSet(
     })
     .join("\n");
 
-  const wideHtml = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8" />
-<style>
+  const css = `
   ${fontFace}
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
@@ -325,16 +329,23 @@ export function renderSet(
     background: ${bg};
     overflow: hidden;
     font-family: ${fontFamily};
-  }
-</style>
-</head>
-<body>
-  <div class="canvas">
+  }`;
+
+  const canvasHtml = `<div class="canvas" data-panels="${N}">
     ${decorHtml}
     ${items}
-  </div>
+  </div>`;
+
+  const wideHtml = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>${css}</style>
+</head>
+<body>
+  ${canvasHtml}
 </body>
 </html>`;
 
-  return { wideHtml, viewport: { width: canvasW, height: H }, clips, deviceCenters };
+  return { wideHtml, canvasHtml, css, viewport: { width: canvasW, height: H }, clips, deviceCenters };
 }

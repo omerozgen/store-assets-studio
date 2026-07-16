@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import JSZip from "jszip";
 import { renderSet, placeholderScreenshot, type Panel } from "@sas/core-renderer";
 import { THEMES, resolveTheme } from "@sas/themes";
@@ -28,6 +28,28 @@ const readFile = (f: File): Promise<string> =>
     r.onerror = rej;
     r.readAsDataURL(f);
   });
+
+// ---- Önizleme için blob URL katmanı ----
+// State/kayıt/export'ta data URI kalır (kalıcı + sunucuya gidebilir); ama önizleme
+// HTML'ine data URI gömmek her güncellemede megabaytlarca parse + görsel decode
+// demek. Blob URL ile HTML kilobaytlara iner, tarayıcı görseli BİR KEZ çözer ve
+// önbellekten kullanır → Canva tarzı akıcılık. Aynı data URI hep aynı URL'i alır.
+const blobUrlCache = new Map<string, string>();
+function previewUrl(src: string): string {
+  if (!src.startsWith("data:")) return src;
+  const hit = blobUrlCache.get(src);
+  if (hit) return hit;
+  const comma = src.indexOf(",");
+  const head = src.slice(5, comma); // ör. "image/png;base64"
+  const mime = head.split(";")[0] || "application/octet-stream";
+  const body = src.slice(comma + 1);
+  const blob = head.includes("base64")
+    ? new Blob([Uint8Array.from(atob(body), (c) => c.charCodeAt(0))], { type: mime })
+    : new Blob([decodeURIComponent(body)], { type: mime });
+  const url = URL.createObjectURL(blob);
+  blobUrlCache.set(src, url);
+  return url;
+}
 
 /** PNG base64'ü seçilen formata (jpeg/webp) canvas ile çevirir. png ise dokunmaz. */
 async function convertPng(base64Png: string, mime: string, quality: number): Promise<Blob> {
@@ -178,7 +200,7 @@ export function App() {
   const theme = useMemo(
     () => resolveTheme(themeId, overrides),
     [themeId, finish, pose, tiltDeg, leanDeg, thickness, captionPos, arrangement, orientation,
-     useBrandBg, bgA, bgB, useTextColor, textColor, fontSrc],
+      useBrandBg, bgA, bgB, useTextColor, textColor, fontSrc],
   );
 
   // ---- Proje durumu: topla / uygula ----
@@ -215,13 +237,13 @@ export function App() {
           applyProject(p);
         }
       })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => { restoredRef.current = true; });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
     if (!restoredRef.current) return;
-    const t = setTimeout(() => { idbSet("project", collectProject()).catch(() => {}); }, 800);
+    const t = setTimeout(() => { idbSet("project", collectProject()).catch(() => { }); }, 800);
     return () => clearTimeout(t);
   }); // her state değişiminde debounce'lı kaydet
 
@@ -265,34 +287,60 @@ export function App() {
     applyProject(JSON.parse(nxt));
   }
 
-  // Panellerin aktif dildeki hâli (önizleme). Boş görüntüler placeholder ile.
-  const localePanels = (loc: string): Panel[] =>
-    (panels.length ? panels : [{ id: "x", src: "", captions: {} } as EditorPanel]).map((p, i) => ({
-      caption: p.captions[loc] || undefined,
-      screenshotSrc: p.src || placeholderScreenshot(1080, 2280, `Ekran ${i + 1}`, "#1f2937"),
-      captionXFrac: p.capX,
-      captionYFrac: p.capY,
-      deviceXFrac: p.devX,
-      deviceYFrac: p.devY,
-      texts: (p.texts ?? [])
-        .map((t) => ({ text: t.content[loc] || "", xFrac: t.x, yFrac: t.y, sizePct: t.sizePct, color: t.color }))
-        .filter((t) => t.text),
-    }));
+  // Panellerin aktif dildeki hâli. Boş görüntüler placeholder ile.
+  // preview=true → görseller blob URL'e çevrilir (hafif HTML); export data URI kullanır.
+  const localePanels = (loc: string, preview = false): Panel[] =>
+    (panels.length ? panels : [{ id: "x", src: "", captions: {} } as EditorPanel]).map((p, i) => {
+      const src = p.src || placeholderScreenshot(1080, 2280, `Ekran ${i + 1}`, "#1f2937");
+      return {
+        caption: p.captions[loc] || undefined,
+        screenshotSrc: preview ? previewUrl(src) : src,
+        captionXFrac: p.capX,
+        captionYFrac: p.capY,
+        deviceXFrac: p.devX,
+        deviceYFrac: p.devY,
+        texts: (p.texts ?? [])
+          .map((t) => ({ id: t.id, text: t.content[loc] || "", xFrac: t.x, yFrac: t.y, sizePct: t.sizePct, color: t.color }))
+          .filter((t) => t.text),
+      };
+    });
 
-  const renderPanels = useMemo(() => localePanels(locale), [panels, locale]);
+  const renderPanels = useMemo(() => localePanels(locale, true), [panels, locale]);
 
-  // Önizlemeyi 2× çözünürlükte render edip ekrana küçültüyoruz (supersample) →
-  // editördeki görüntü export kadar keskin olur (1× render soft görünüyordu).
-  const PREVIEW_SS = 2;
-  const { wideHtml, viewport, deviceCenters } = useMemo(() => {
-    const lv = logicalViewport(target);
-    return renderSet(
-      theme,
-      renderPanels,
-      { width: lv.width * PREVIEW_SS, height: lv.height * PREVIEW_SS },
-      target.deviceKind ?? "phone",
-    );
-  }, [theme, renderPanels, target]);
+  // ---- Önizleme çözünürlüğü: ekranda kaplanan alan kadar ----
+  // Tuval eskiden mantıksal boyutun 2 katında render edilip CSS ile küçültülüyordu;
+  // panel sayısı artınca (12 panel ≈ 31.000px genişlik) Chrome/Safari bu dev katmanın
+  // karolarını GPU belleğinde tutamıyor, fare hareketinde beyaz yanıp sönüyordu
+  // (raster thrash). Artık panel, ekranda kapladığı CSS pikseli × devicePixelRatio
+  // boyutunda üretilir → katman ekran kadar küçük, görüntü yine keskin. Tüm
+  // koordinatlar oransal (frac) olduğundan export birebir aynı kalır.
+  const [stage, setStage] = useState({ w: 1200, h: 800 });
+  const onStageSize = useCallback(
+    (w: number, h: number) => setStage((s) => (s.w === w && s.h === h ? s : { w, h })),
+    [],
+  );
+  const lv = logicalViewport(target);
+  const stagePad = 48; // .stage padding'i (24px × 2) — sığdırma hesabıyla aynı
+  const fitScale = Math.max(
+    0.01,
+    Math.min((stage.w - stagePad) / (lv.width * renderPanels.length), (stage.h - stagePad) / lv.height),
+  );
+  // 16px kuantizasyon: pencere sürüklenirken her pikselde yeniden üretim olmasın.
+  const renderW = Math.min(
+    lv.width * 2, // eski süperörnekleme tavanı — bundan keskini gereksiz
+    Math.max(64, Math.ceil((lv.width * fitScale * (window.devicePixelRatio || 1)) / 16) * 16),
+  );
+  const renderH = Math.round(lv.height * (renderW / lv.width));
+  // Render pikseli → CSS pikseli ölçeği (Retina'da ~1/2'ye denk gelir).
+  const previewScale = (lv.width * fitScale) / renderW;
+
+  const { canvasHtml, css, viewport, deviceCenters } = useMemo(() => {
+    // Özel font da önizlemede blob URL ile — büyük data URI'yi CSS'e gömme.
+    const previewTheme = theme.font.customSrc
+      ? { ...theme, font: { ...theme.font, customSrc: previewUrl(theme.font.customSrc) } }
+      : theme;
+    return renderSet(previewTheme, renderPanels, { width: renderW, height: renderH }, target.deviceKind ?? "phone");
+  }, [theme, renderPanels, target, renderW, renderH]);
 
   // --- yükleme ---
   async function addFiles(files: FileList | File[]) {
@@ -376,19 +424,19 @@ export function App() {
       prev.map((p, k) =>
         k === i
           ? {
-              ...p,
-              texts: [
-                ...(p.texts ?? []),
-                {
-                  id: uid(),
-                  content: { [locale]: "Metin" },
-                  x: 0.5,
-                  y: Math.min(0.9, 0.3 + (p.texts?.length ?? 0) * 0.08),
-                  sizePct: 3.2,
-                  color: "#ffffff",
-                },
-              ],
-            }
+            ...p,
+            texts: [
+              ...(p.texts ?? []),
+              {
+                id: uid(),
+                content: { [locale]: "Metin" },
+                x: 0.5,
+                y: Math.min(0.9, 0.3 + (p.texts?.length ?? 0) * 0.08),
+                sizePct: 3.2,
+                color: "#ffffff",
+              },
+            ],
+          }
           : p,
       ),
     );
@@ -478,7 +526,7 @@ export function App() {
   }
   async function resetProject() {
     if (!confirm("Proje sıfırlansın mı? (otokayıt silinir)")) return;
-    await idbDel("project").catch(() => {});
+    await idbDel("project").catch(() => { });
     location.reload();
   }
 
@@ -832,14 +880,17 @@ export function App() {
 
       <main className="preview">
         <Preview
-          wideHtml={wideHtml}
+          canvasHtml={canvasHtml}
+          css={css}
           viewport={viewport}
+          scale={previewScale}
+          onStageSize={onStageSize}
           panelCount={renderPanels.length}
           caps={caps}
           devs={deviceCenters}
           onCaptionMove={setCapPos}
           txts={panels.flatMap((p, i) =>
-            (p.texts ?? []).map((t, j) => ({ i, j, text: t.content[locale] || "Metin", x: t.x, y: t.y })),
+            (p.texts ?? []).map((t, j) => ({ i, j, id: t.id, text: t.content[locale] || "Metin", x: t.x, y: t.y })),
           )}
           onDeviceMove={setDevPos}
           onTextMove={setTextPos}
@@ -853,10 +904,57 @@ export function App() {
 
 type Cap = { text: string; x: number; y: number };
 type Dev = { x: number; y: number };
-type Txt = { i: number; j: number; text: string; x: number; y: number };
+type Txt = { i: number; j: number; id?: string; text: string; x: number; y: number };
+type DragTarget = { kind: "cap" | "dev" | "txt"; i: number; j?: number; id?: string };
+
+/**
+ * KALICI önizleme belgesi — bir kez yüklenir, bir daha asla yeniden yüklenmez.
+ * Tuval (canvas HTML + CSS) postMessage ile içine enjekte edilir; görseller blob
+ * URL olduğundan tarayıcı önbelleğinden gelir. Belge hiç ölmediği için beyaz
+ * flaş oluşamaz; "sas-move" sürüklemede yalnız ilgili elemanı taşır.
+ */
+const HOST_DOC = `<!DOCTYPE html><html><head><meta charset="utf-8"><style id="sas-css"></style></head>
+<body><div id="sas-root"></div>
+<script>
+(function () {
+  var root = document.getElementById("sas-root");
+  var style = document.getElementById("sas-css");
+  window.addEventListener("message", function (e) {
+    var d = e.data;
+    if (!d) return;
+    if (d.type === "sas-canvas") {
+      if (style.textContent !== d.css) style.textContent = d.css;
+      root.innerHTML = d.canvas;
+      return;
+    }
+    if (d.type !== "sas-move") return;
+    var c = root.querySelector(".canvas");
+    if (!c) return;
+    var N = Number(c.getAttribute("data-panels")) || 1;
+    var W = c.offsetWidth / N, H = c.offsetHeight, el;
+    if (d.kind === "dev") el = document.getElementById("dev-" + d.i);
+    else if (d.kind === "cap") el = document.getElementById("cap-" + d.i);
+    else if (d.id != null) el = document.getElementById("txt-" + d.id);
+    if (!el) return;
+    var cx = d.i * W + d.x * W, cy = d.y * H;
+    if (d.kind === "dev") {
+      el.style.left = (cx - el.offsetWidth / 2) + "px";
+      el.style.top = (cy - el.offsetHeight / 2) + "px";
+    } else {
+      el.style.left = cx + "px";
+      el.style.top = cy + "px";
+      el.style.transform = "translateX(-50%)";
+    }
+  });
+})();
+</script></body></html>`;
+
 function Preview({
-  wideHtml,
+  canvasHtml,
+  css,
   viewport,
+  scale,
+  onStageSize,
   panelCount,
   caps,
   devs,
@@ -867,8 +965,13 @@ function Preview({
   onDropImage,
   onSelect,
 }: {
-  wideHtml: string;
+  canvasHtml: string;
+  css: string;
   viewport: { width: number; height: number };
+  /** Render pikseli → CSS pikseli (App hesaplar; tuval ekrana bununla sığar). */
+  scale: number;
+  /** Sahne (stage) boyutunu App'e bildirir — render çözünürlüğü buna göre seçilir. */
+  onStageSize: (w: number, h: number) => void;
   panelCount: number;
   caps: Cap[];
   devs: Dev[];
@@ -881,42 +984,82 @@ function Preview({
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(0.2);
-  const [dragging, setDragging] = useState<{ kind: "cap" | "dev" | "txt"; i: number; j?: number } | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [ready, setReady] = useState(false);
+  const [dragging, setDragging] = useState<DragTarget | null>(null);
+  // Sürükleme sırasında AKTİF elemanın anlık konumu (yalnız tutamak overlay'i için;
+  // ağır panels state'i sürüklerken değişmez → HTML yeniden üretilmez).
+  const [live, setLive] = useState<(DragTarget & { x: number; y: number }) | null>(null);
   const [dropZone, setDropZone] = useState<number | null>(null);
+
+  // Tuvali kalıcı belgeye gönder — iframe yüklendiyse. Yeniden yükleme YOK.
+  useEffect(() => {
+    if (!ready) return;
+    iframeRef.current?.contentWindow?.postMessage({ type: "sas-canvas", css, canvas: canvasHtml }, "*");
+  }, [ready, canvasHtml, css]);
+  // Sahne boyutunu App'e bildir — App bundan hem sığdırma ölçeğini hem de
+  // önizleme render çözünürlüğünü türetir (ekran kadar piksel, fazlası değil).
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    const fit = () => {
-      const pad = 48;
-      setScale(Math.min((el.clientWidth - pad) / viewport.width, (el.clientHeight - pad) / viewport.height));
-    };
-    fit();
-    const ro = new ResizeObserver(fit);
+    const report = () => onStageSize(el.clientWidth, el.clientHeight);
+    report();
+    const ro = new ResizeObserver(report);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [viewport.width, viewport.height]);
+  }, [onStageSize]);
 
-  // Sağlam sürükleme: pointerdown ile başla, window düzeyinde takip et (küçük
-  // tutamağı kaçırma/iframe üstünde takılma sorunlarını çözer).
+  // Sağlam + hızlı sürükleme: window düzeyinde takip; hareket requestAnimationFrame
+  // ile 60fps'e sınırlanır ve iframe'e postMessage ile CANLI uygulanır (ağır React
+  // state / HTML yeniden üretimi YOK). Kalıcı state'e commit yalnız BIRAKINCA bir kez
+  // yapılır → tek temiz yeniden yükleme, sürüklerken beyaz flaş/donma yok.
   useEffect(() => {
     if (!dragging) return;
     const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+    let raf: number | null = null;
+    let pending: { x: number; y: number } | null = null;
+
+    const apply = () => {
+      raf = null;
+      if (!pending) return;
+      const { kind, i, j, id } = dragging;
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: "sas-move", kind, i, j, id, x: pending.x, y: pending.y },
+        "*",
+      );
+      setLive({ ...dragging, x: pending.x, y: pending.y });
+    };
     const move = (e: PointerEvent) => {
       const box = boxRef.current;
       if (!box) return;
       const r = box.getBoundingClientRect();
-      const { kind, i, j } = dragging;
+      const { kind, i } = dragging;
       const fx = ((e.clientX - r.left) / r.width) * panelCount - i;
       const fy = (e.clientY - r.top) / r.height;
-      if (kind === "cap") onCaptionMove(i, clamp(fx, 0.06, 0.94), clamp(fy, 0.02, 0.95));
-      else if (kind === "txt") onTextMove(i, j!, clamp(fx, 0.04, 0.96), clamp(fy, 0.02, 0.96));
-      else onDeviceMove(i, clamp(fx, -0.1, 1.1), clamp(fy, 0.1, 0.95));
+      pending =
+        kind === "cap"
+          ? { x: clamp(fx, 0.06, 0.94), y: clamp(fy, 0.02, 0.95) }
+          : kind === "txt"
+            ? { x: clamp(fx, 0.04, 0.96), y: clamp(fy, 0.02, 0.96) }
+            : { x: clamp(fx, -0.1, 1.1), y: clamp(fy, 0.1, 0.95) };
+      if (raf === null) raf = requestAnimationFrame(apply);
     };
-    const up = () => setDragging(null);
+    const up = () => {
+      if (raf !== null) cancelAnimationFrame(raf);
+      // Son konumu kalıcı state'e yaz (yalnızca gerçekten hareket olduysa).
+      if (pending) {
+        const { kind, i, j } = dragging;
+        if (kind === "cap") onCaptionMove(i, pending.x, pending.y);
+        else if (kind === "txt") onTextMove(i, j!, pending.x, pending.y);
+        else onDeviceMove(i, pending.x, pending.y);
+      }
+      setLive(null);
+      setDragging(null);
+    };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     return () => {
+      if (raf !== null) cancelAnimationFrame(raf);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
     };
@@ -924,26 +1067,7 @@ function Preview({
 
   const isDrag = (kind: "cap" | "dev", i: number) => dragging?.kind === kind && dragging.i === i;
 
-  // Çift-buffer: yeni HTML arkadaki iframe'e yazılır, YÜKLENİNCE öne alınır →
-  // sürükleme/ayar değişiminde beyaz flaş (flicker) olmaz.
-  const [bufs, setBufs] = useState<[string, string]>([wideHtml, ""]);
-  const frontRef = useRef(0);
-  const [front, setFront] = useState(0);
-  useEffect(() => {
-    setBufs((prev) => {
-      const back = 1 - frontRef.current;
-      const next: [string, string] = [prev[0], prev[1]];
-      next[back] = wideHtml;
-      return next;
-    });
-  }, [wideHtml]);
-  const onBufLoad = (idx: number) => {
-    if (idx !== frontRef.current && bufs[idx]) {
-      frontRef.current = idx;
-      setFront(idx);
-    }
-  };
-  const iframeStyle = (idx: number): CSSProperties => ({
+  const iframeStyle: CSSProperties = {
     position: "absolute",
     left: 0,
     top: 0,
@@ -953,14 +1077,12 @@ function Preview({
     transformOrigin: "top left",
     border: "none",
     pointerEvents: "none", // önizleme etkileşimsiz; tutamaklar üstte
-    visibility: front === idx ? "visible" : "hidden",
-  });
+  };
 
   return (
     <div className="stage" ref={wrapRef}>
       <div className="canvasBox" ref={boxRef} style={{ width: viewport.width * scale, height: viewport.height * scale }}>
-        <iframe title="preview-a" srcDoc={bufs[0]} style={iframeStyle(0)} onLoad={() => onBufLoad(0)} />
-        <iframe title="preview-b" srcDoc={bufs[1]} style={iframeStyle(1)} onLoad={() => onBufLoad(1)} />
+        <iframe ref={iframeRef} title="preview" srcDoc={HOST_DOC} style={iframeStyle} onLoad={() => setReady(true)} />
         {/* Panel başına dosya bırakma bölgeleri (telefona doğrudan görsel at) */}
         {Array.from({ length: panelCount }, (_, i) => (
           <div
@@ -983,43 +1105,57 @@ function Preview({
           <div key={i} className="divider" style={{ left: ((i + 1) / panelCount) * 100 + "%" }} />
         ))}
         {/* Sürüklenebilir cihaz tutamakları (telefonun merkezinde) */}
-        {devs.map((d, i) => (
-          <div
-            key={"dev" + i}
-            className={"devHandle " + (isDrag("dev", i) ? "on" : "")}
-            style={{ left: ((i + d.x) / panelCount) * 100 + "%", top: d.y * 100 + "%" }}
-            onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "dev", i }); onSelect({ kind: "dev", i }); }}
-            title="Sürükleyerek telefonu taşı (ok tuşlarıyla ince ayar)"
-          >
-            ✥
-          </div>
-        ))}
+        {devs.map((d, i) => {
+          const lv = live?.kind === "dev" && live.i === i ? live : null;
+          const x = lv ? lv.x : d.x;
+          const y = lv ? lv.y : d.y;
+          return (
+            <div
+              key={"dev" + i}
+              className={"devHandle " + (isDrag("dev", i) ? "on" : "")}
+              style={{ left: ((i + x) / panelCount) * 100 + "%", top: y * 100 + "%" }}
+              onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "dev", i }); onSelect({ kind: "dev", i }); }}
+              title="Sürükleyerek telefonu taşı (ok tuşlarıyla ince ayar)"
+            >
+              ✥
+            </div>
+          );
+        })}
         {/* Sürüklenebilir başlık tutamakları */}
-        {caps.map((c, i) =>
-          c.text ? (
+        {caps.map((c, i) => {
+          if (!c.text) return null;
+          const lv = live?.kind === "cap" && live.i === i ? live : null;
+          const x = lv ? lv.x : c.x;
+          const y = lv ? lv.y : c.y;
+          return (
             <div
               key={i}
               className={"capHandle " + (isDrag("cap", i) ? "on" : "")}
-              style={{ left: ((i + c.x) / panelCount) * 100 + "%", top: c.y * 100 + "%" }}
+              style={{ left: ((i + x) / panelCount) * 100 + "%", top: y * 100 + "%" }}
               onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "cap", i }); onSelect({ kind: "cap", i }); }}
               title="Sürükleyerek başlığı taşı (ok tuşlarıyla ince ayar)"
             >
               <span>⠿ {c.text}</span>
             </div>
-          ) : null,
-        )}
+          );
+        })}
         {/* Sürüklenebilir serbest metin tutamakları */}
-        {txts.map((t) => (
-          <div
-            key={`t${t.i}-${t.j}`}
-            className={"txtHandle " + (dragging?.kind === "txt" && dragging.i === t.i && dragging.j === t.j ? "on" : "")}
-            style={{ left: ((t.i + t.x) / panelCount) * 100 + "%", top: t.y * 100 + "%" }}
-            onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "txt", i: t.i, j: t.j }); onSelect({ kind: "txt", i: t.i, j: t.j }); }}
-            title="Sürükleyerek metni taşı (ok tuşlarıyla ince ayar)"
-          >
-            <span>T {t.text}</span>
-          </div>
-        ))}
+        {txts.map((t) => {
+          const lv = live?.kind === "txt" && live.i === t.i && live.j === t.j ? live : null;
+          const x = lv ? lv.x : t.x;
+          const y = lv ? lv.y : t.y;
+          return (
+            <div
+              key={`t${t.i}-${t.j}`}
+              className={"txtHandle " + (dragging?.kind === "txt" && dragging.i === t.i && dragging.j === t.j ? "on" : "")}
+              style={{ left: ((t.i + x) / panelCount) * 100 + "%", top: y * 100 + "%" }}
+              onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "txt", i: t.i, j: t.j, id: t.id }); onSelect({ kind: "txt", i: t.i, j: t.j }); }}
+              title="Sürükleyerek metni taşı (ok tuşlarıyla ince ayar)"
+            >
+              <span>T {t.text}</span>
+            </div>
+          );
+        })}
       </div>
       <div className="hint">{panelCount} panel · başlık (⠿) ve telefon (✥) tutamaklarını sürükle · canlı önizleme</div>
     </div>
