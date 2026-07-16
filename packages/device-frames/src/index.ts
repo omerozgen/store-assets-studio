@@ -98,7 +98,8 @@ export function phoneMockupHtml(opts: PhoneMockupOptions): string {
   const tiltY = opts.tiltYDeg ?? 0;
   const tiltX = opts.tiltXDeg ?? 0;
   // Yatay: cihazı 90° çevir; ekran görüntüsü çerçeve içinde ters-döndürülür (upright kalır).
-  const rot = (opts.rotateDeg ?? 0) + (opts.landscape ? 90 : 0);
+  const lean = opts.rotateDeg ?? 0;
+  const land = opts.landscape ? 90 : 0;
   const thickness = (widthPx * (opts.thicknessPct ?? 8)) / 100;
 
   const [edgeLight, edgeDark] = EDGE_COLORS[finish];
@@ -122,8 +123,11 @@ export function phoneMockupHtml(opts: PhoneMockupOptions): string {
 
   const front = phoneFrameSvg({ id, screenshotSrc, finish, landscape: opts.landscape });
 
+  // Açı (tilt/lean) CSS değişkenlerinden okunur → editör, belgeyi yeniden kurmadan
+  // .canvas üzerindeki --tilt/--lean/--tiltx/--land'i canlı güncelleyerek 60fps döndürür.
+  // Fallback = baked değer: set.ts .canvas'a değişkenleri basar, standalone demo'da da doğru kalır.
   return `<div style="position:absolute;inset:0;transform-style:preserve-3d;
-      transform:rotateZ(${rot}deg) rotateX(${tiltX}deg) rotateY(${tiltY}deg);">
+      transform:rotateZ(calc(var(--lean, ${lean}deg) + var(--land, ${land}deg))) rotateX(var(--tiltx, ${tiltX}deg)) rotateY(var(--tilt, ${tiltY}deg));">
     ${layers}
     <div style="position:absolute;inset:0;transform:translateZ(0.6px);">${front}</div>
   </div>`;
@@ -185,8 +189,9 @@ export function tabletMockupHtml(opts: TabletMockupOptions): string {
       width:${min * 0.012}px;height:${min * 0.012}px;border-radius:50%;background:#0b0b14;box-shadow:0 0 0 1px rgba(255,255,255,0.1);"></div>
   </div>`;
 
+  // Açı CSS değişkenlerinden (fallback = baked); telefonla aynı canlı-güncelleme yolu.
   return `<div style="position:absolute;inset:0;transform-style:preserve-3d;
-      transform:rotateZ(${rot}deg) rotateX(${tiltX}deg) rotateY(${tiltY}deg);">
+      transform:rotateZ(calc(var(--lean, ${rot}deg) + var(--land, 0deg))) rotateX(var(--tiltx, ${tiltX}deg)) rotateY(var(--tilt, ${tiltY}deg));">
     ${layers}
     ${front}
   </div>`;

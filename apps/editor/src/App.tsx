@@ -59,6 +59,17 @@ const ASSET_LABEL: Record<string, string> = {
   icon: "İkon",
 };
 
+/** Bir değeri geciktirir: hızlı ardışık değişimlerde yalnız duraklayınca günceller.
+ *  Derinlik (thickness) gibi yapısal-rebuild tetikleyen kaydırıcılarda kullanılır. */
+function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
+
 // ---- IndexedDB otokayıt (localStorage 5MB'a sığmaz; görseller data URI) ----
 function idbOpen(): Promise<IDBDatabase> {
   return new Promise((res, rej) => {
@@ -175,11 +186,22 @@ export function App() {
     },
   };
 
+  // Açı (tiltDeg/leanDeg) ve derinlik (thickness) önizlemede AKICI olmalı:
+  // - Açı: theme bağımlılığından ÇIKARILDI → kaydırıcı belgeyi yeniden kurmaz; değer
+  //   iframe'e CSS değişkeni (--tilt/--lean) olarak canlı yazılır (aşağıda Preview).
+  //   theme yine de canlı açıyı override'da taşır → yapısal bir rebuild olduğunda doğru
+  //   değer "bake" edilir; export de canlı değeri (overrides) kullanır.
+  // - Derinlik: extrusion katmanlarını değiştirir (yapısal) → debounce'lı değer bake edilir.
+  const thicknessRender = useDebounced(thickness, 120);
   const theme = useMemo(
-    () => resolveTheme(themeId, overrides),
-    [themeId, finish, pose, tiltDeg, leanDeg, thickness, captionPos, arrangement, orientation,
+    () => resolveTheme(themeId, { ...overrides, device: { ...deviceOverride, thicknessPct: thicknessRender } }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [themeId, finish, pose, thicknessRender, captionPos, arrangement, orientation,
      useBrandBg, bgA, bgB, useTextColor, textColor, fontSrc],
   );
+  // Cihazlara miras verilecek canlı açı (pose=flat → açı 0). Preview iframe'e yazar.
+  const tiltVar = pose === "angled" ? tiltDeg : 0;
+  const leanVar = leanDeg;
 
   // ---- Proje durumu: topla / uygula ----
   function collectProject(): ProjectState {
@@ -835,6 +857,7 @@ export function App() {
           wideHtml={wideHtml}
           viewport={viewport}
           panelCount={renderPanels.length}
+          liveVars={{ tilt: tiltVar, lean: leanVar }}
           caps={caps}
           devs={deviceCenters}
           onCaptionMove={setCapPos}
@@ -858,6 +881,7 @@ function Preview({
   wideHtml,
   viewport,
   panelCount,
+  liveVars,
   caps,
   devs,
   txts,
@@ -870,6 +894,7 @@ function Preview({
   wideHtml: string;
   viewport: { width: number; height: number };
   panelCount: number;
+  liveVars: { tilt: number; lean: number };
   caps: Cap[];
   devs: Dev[];
   txts: Txt[];
@@ -883,7 +908,18 @@ function Preview({
   const boxRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0.2);
   const [dragging, setDragging] = useState<{ kind: "cap" | "dev" | "txt"; i: number; j?: number } | null>(null);
+  // Sürükleme sırasında tutamağın canlı konumu (kesir). Panel state'i YALNIZ pointerup'ta
+  // güncellenir → sürüklerken belge yeniden kurulmaz; tutamak burada, iframe elemanı ise
+  // --dx/--dy CSS değişkeniyle canlı taşınır.
+  const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
+  const dragPosRef = useRef<{ x: number; y: number } | null>(null);
   const [dropZone, setDropZone] = useState<number | null>(null);
+  // İki iframe DOM'una erişim (same-origin srcDoc) — açı ve sürükleme canlı yazılır.
+  const iframeEls = useRef<[HTMLIFrameElement | null, HTMLIFrameElement | null]>([null, null]);
+  const frontRef = useRef(0);
+  const frontCanvas = (): HTMLElement | null =>
+    (iframeEls.current[frontRef.current]?.contentDocument?.querySelector(".canvas") as HTMLElement | null) ?? null;
+  const frontDoc = (): Document | null => iframeEls.current[frontRef.current]?.contentDocument ?? null;
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -898,36 +934,69 @@ function Preview({
   }, [viewport.width, viewport.height]);
 
   // Sağlam sürükleme: pointerdown ile başla, window düzeyinde takip et (küçük
-  // tutamağı kaçırma/iframe üstünde takılma sorunlarını çözer).
+  // tutamağı kaçırma/iframe üstünde takılma sorunlarını çözer). Sürükleme boyunca panel
+  // state'i DEĞİŞMEZ → belge yeniden kurulmaz; tutamak (dragPos) ve iframe elemanı
+  // (--dx/--dy) canlı hareket eder. pointerup'ta gerçek konum state'e commit edilir (tek rebuild).
   useEffect(() => {
     if (!dragging) return;
     const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+    const { kind, i, j } = dragging;
+    // Sürüklenen elemanın commit'li (bake edilmiş) merkezi — delta buna göre hesaplanır.
+    const committed =
+      kind === "cap"
+        ? { x: caps[i]?.x ?? 0.5, y: caps[i]?.y ?? 0.05 }
+        : kind === "txt"
+          ? (() => { const t = txts.find((t) => t.i === i && t.j === j); return { x: t?.x ?? 0.5, y: t?.y ?? 0.3 }; })()
+          : { x: devs[i]?.x ?? 0.5, y: devs[i]?.y ?? 0.5 };
+    const elId = kind === "cap" ? `cap-${i}` : kind === "txt" ? `txt-${i}-${j}` : `dev-wrap-${i}`;
+    const panelWpx = viewport.width / panelCount;
     const move = (e: PointerEvent) => {
       const box = boxRef.current;
       if (!box) return;
       const r = box.getBoundingClientRect();
-      const { kind, i, j } = dragging;
-      const fx = ((e.clientX - r.left) / r.width) * panelCount - i;
-      const fy = (e.clientY - r.top) / r.height;
-      if (kind === "cap") onCaptionMove(i, clamp(fx, 0.06, 0.94), clamp(fy, 0.02, 0.95));
-      else if (kind === "txt") onTextMove(i, j!, clamp(fx, 0.04, 0.96), clamp(fy, 0.02, 0.96));
-      else onDeviceMove(i, clamp(fx, -0.1, 1.1), clamp(fy, 0.1, 0.95));
+      const rawX = ((e.clientX - r.left) / r.width) * panelCount - i;
+      const rawY = (e.clientY - r.top) / r.height;
+      const fx = kind === "cap" ? clamp(rawX, 0.06, 0.94) : kind === "txt" ? clamp(rawX, 0.04, 0.96) : clamp(rawX, -0.1, 1.1);
+      const fy = kind === "cap" ? clamp(rawY, 0.02, 0.95) : kind === "txt" ? clamp(rawY, 0.02, 0.96) : clamp(rawY, 0.1, 0.95);
+      const pos = { x: fx, y: fy };
+      dragPosRef.current = pos;
+      setDragPos(pos);
+      // iframe elemanını belge kurmadan canlı taşı (delta = commit'e göre).
+      const el = frontDoc()?.getElementById(elId);
+      if (el) {
+        el.style.setProperty("--dx", (fx - committed.x) * panelWpx + "px");
+        el.style.setProperty("--dy", (fy - committed.y) * viewport.height + "px");
+      }
     };
-    const up = () => setDragging(null);
+    const up = () => {
+      const p = dragPosRef.current;
+      if (p) {
+        if (kind === "cap") onCaptionMove(i, p.x, p.y);
+        else if (kind === "txt") onTextMove(i, j!, p.x, p.y);
+        else onDeviceMove(i, p.x, p.y);
+      }
+      dragPosRef.current = null;
+      setDragPos(null);
+      setDragging(null);
+    };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     return () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
     };
-  }, [dragging, panelCount, onCaptionMove, onDeviceMove, onTextMove]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragging, panelCount, viewport.width, viewport.height, onCaptionMove, onDeviceMove, onTextMove]);
 
-  const isDrag = (kind: "cap" | "dev", i: number) => dragging?.kind === kind && dragging.i === i;
+  const isDrag = (kind: "cap" | "dev" | "txt", i: number, j?: number) =>
+    dragging?.kind === kind && dragging.i === i && (j === undefined || dragging.j === j);
+  // Bir tutamağın gösterilecek konumu: o eleman sürükleniyorsa canlı dragPos, değilse commit'li.
+  const posOf = (kind: "cap" | "dev" | "txt", i: number, base: { x: number; y: number }, j?: number) =>
+    isDrag(kind, i, j) && dragPos ? dragPos : base;
 
   // Çift-buffer: yeni HTML arkadaki iframe'e yazılır, YÜKLENİNCE öne alınır →
   // sürükleme/ayar değişiminde beyaz flaş (flicker) olmaz.
   const [bufs, setBufs] = useState<[string, string]>([wideHtml, ""]);
-  const frontRef = useRef(0);
   const [front, setFront] = useState(0);
   useEffect(() => {
     setBufs((prev) => {
@@ -943,6 +1012,17 @@ function Preview({
       setFront(idx);
     }
   };
+
+  // Açıyı iframe'e CANLI yaz: kaydırıcı belgeyi kurmaz, sadece --tilt/--lean değişir → 60fps.
+  // Yapısal rebuild + flip sonrası (front değişince) de yeniden uygulanır (bake edilen değer
+  // bayat olabilir). --tiltx/--land pose/orientation ile rebuild edilip doğru bake edilir.
+  useEffect(() => {
+    const c = frontCanvas();
+    if (c) {
+      c.style.setProperty("--tilt", liveVars.tilt + "deg");
+      c.style.setProperty("--lean", liveVars.lean + "deg");
+    }
+  }, [liveVars.tilt, liveVars.lean, front, wideHtml]);
   const iframeStyle = (idx: number): CSSProperties => ({
     position: "absolute",
     left: 0,
@@ -959,8 +1039,8 @@ function Preview({
   return (
     <div className="stage" ref={wrapRef}>
       <div className="canvasBox" ref={boxRef} style={{ width: viewport.width * scale, height: viewport.height * scale }}>
-        <iframe title="preview-a" srcDoc={bufs[0]} style={iframeStyle(0)} onLoad={() => onBufLoad(0)} />
-        <iframe title="preview-b" srcDoc={bufs[1]} style={iframeStyle(1)} onLoad={() => onBufLoad(1)} />
+        <iframe title="preview-a" ref={(el) => { iframeEls.current[0] = el; }} srcDoc={bufs[0]} style={iframeStyle(0)} onLoad={() => onBufLoad(0)} />
+        <iframe title="preview-b" ref={(el) => { iframeEls.current[1] = el; }} srcDoc={bufs[1]} style={iframeStyle(1)} onLoad={() => onBufLoad(1)} />
         {/* Panel başına dosya bırakma bölgeleri (telefona doğrudan görsel at) */}
         {Array.from({ length: panelCount }, (_, i) => (
           <div
@@ -983,43 +1063,51 @@ function Preview({
           <div key={i} className="divider" style={{ left: ((i + 1) / panelCount) * 100 + "%" }} />
         ))}
         {/* Sürüklenebilir cihaz tutamakları (telefonun merkezinde) */}
-        {devs.map((d, i) => (
-          <div
-            key={"dev" + i}
-            className={"devHandle " + (isDrag("dev", i) ? "on" : "")}
-            style={{ left: ((i + d.x) / panelCount) * 100 + "%", top: d.y * 100 + "%" }}
-            onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "dev", i }); onSelect({ kind: "dev", i }); }}
-            title="Sürükleyerek telefonu taşı (ok tuşlarıyla ince ayar)"
-          >
-            ✥
-          </div>
-        ))}
+        {devs.map((d, i) => {
+          const p = posOf("dev", i, d);
+          return (
+            <div
+              key={"dev" + i}
+              className={"devHandle " + (isDrag("dev", i) ? "on" : "")}
+              style={{ left: ((i + p.x) / panelCount) * 100 + "%", top: p.y * 100 + "%" }}
+              onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "dev", i }); onSelect({ kind: "dev", i }); }}
+              title="Sürükleyerek telefonu taşı (ok tuşlarıyla ince ayar)"
+            >
+              ✥
+            </div>
+          );
+        })}
         {/* Sürüklenebilir başlık tutamakları */}
-        {caps.map((c, i) =>
-          c.text ? (
+        {caps.map((c, i) => {
+          if (!c.text) return null;
+          const p = posOf("cap", i, c);
+          return (
             <div
               key={i}
               className={"capHandle " + (isDrag("cap", i) ? "on" : "")}
-              style={{ left: ((i + c.x) / panelCount) * 100 + "%", top: c.y * 100 + "%" }}
+              style={{ left: ((i + p.x) / panelCount) * 100 + "%", top: p.y * 100 + "%" }}
               onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "cap", i }); onSelect({ kind: "cap", i }); }}
               title="Sürükleyerek başlığı taşı (ok tuşlarıyla ince ayar)"
             >
               <span>⠿ {c.text}</span>
             </div>
-          ) : null,
-        )}
+          );
+        })}
         {/* Sürüklenebilir serbest metin tutamakları */}
-        {txts.map((t) => (
-          <div
-            key={`t${t.i}-${t.j}`}
-            className={"txtHandle " + (dragging?.kind === "txt" && dragging.i === t.i && dragging.j === t.j ? "on" : "")}
-            style={{ left: ((t.i + t.x) / panelCount) * 100 + "%", top: t.y * 100 + "%" }}
-            onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "txt", i: t.i, j: t.j }); onSelect({ kind: "txt", i: t.i, j: t.j }); }}
-            title="Sürükleyerek metni taşı (ok tuşlarıyla ince ayar)"
-          >
-            <span>T {t.text}</span>
-          </div>
-        ))}
+        {txts.map((t) => {
+          const p = posOf("txt", t.i, { x: t.x, y: t.y }, t.j);
+          return (
+            <div
+              key={`t${t.i}-${t.j}`}
+              className={"txtHandle " + (isDrag("txt", t.i, t.j) ? "on" : "")}
+              style={{ left: ((t.i + p.x) / panelCount) * 100 + "%", top: p.y * 100 + "%" }}
+              onPointerDown={(e) => { e.preventDefault(); setDragging({ kind: "txt", i: t.i, j: t.j }); onSelect({ kind: "txt", i: t.i, j: t.j }); }}
+              title="Sürükleyerek metni taşı (ok tuşlarıyla ince ayar)"
+            >
+              <span>T {t.text}</span>
+            </div>
+          );
+        })}
       </div>
       <div className="hint">{panelCount} panel · başlık (⠿) ve telefon (✥) tutamaklarını sürükle · canlı önizleme</div>
     </div>

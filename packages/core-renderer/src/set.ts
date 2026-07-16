@@ -154,6 +154,13 @@ export function renderSet(
   const dev = theme.device;
   const isTablet = deviceKind === "tablet";
   const landscape = !isTablet && dev.orientation === "landscape";
+  // Açı değerleri tüm cihazlarda ortak (global). Bunları .canvas'a CSS değişkeni olarak
+  // basıyoruz → editör, belgeyi yeniden kurmadan --tilt/--lean/--tiltx'i canlı güncelleyip
+  // 60fps döndürebiliyor. mockup transform'ları bu değişkenleri okur (fallback = baked değer).
+  const tiltY = dev.pose === "angled" ? (dev.tiltDeg ?? 16) : 0;
+  const tiltX = dev.pose === "angled" ? (dev.tiltXDeg ?? 3) : 0;
+  const leanDeg = dev.leanDeg ?? 0;
+  const landDeg = landscape ? 90 : 0;
   // Cihaz boyutu. Tablet: panel (hedef) oranına uyar, daha geniş durur.
   // Telefon yatay: 90° döndüğü için uzun kenar panel genişliğine göre ölçeklenir.
   let deviceW: number;
@@ -236,9 +243,6 @@ export function renderSet(
       const xDrift = cascade ? spread * W * 0.06 : 0;
       const yDrift = cascade ? spread * H * 0.035 : 0;
 
-      const tiltY = dev.pose === "angled" ? (dev.tiltDeg ?? 16) : 0;
-      const tiltX = dev.pose === "angled" ? (dev.tiltXDeg ?? 3) : 0;
-
       // Cihaz konumu. Manuel override (deviceXFrac/YFrac) varsa yerleşimi geçersiz kılar.
       // straddle: cihaz merkezi panelin SAĞ sınırına (seam) oturur → telefon bölünür.
       const capPos = theme.caption.position;
@@ -261,10 +265,12 @@ export function renderSet(
       const hasPos = p.captionXFrac != null && p.captionYFrac != null;
       const capTop = hasPos ? p.captionYFrac! * H : capPos === "top" ? H * 0.05 : H * 0.82;
       const capLeft = hasPos ? i * W + p.captionXFrac! * W : i * W + W * 0.07;
-      const capTransform = hasPos ? "translateX(-50%)" : "none";
+      const capTransform = hasPos ? "translateX(-50%)" : "";
 
+      // id + --dx/--dy: editör sürüklemede bu elemanı belge kurmadan canlı taşır (pointerup'ta commit).
       const captionHtml = p.caption
-        ? `<div style="position:absolute;left:${capLeft}px;top:${capTop}px;width:${W * 0.86}px;transform:${capTransform};
+        ? `<div id="cap-${i}" style="position:absolute;left:${capLeft}px;top:${capTop}px;width:${W * 0.86}px;
+            transform:${capTransform} translate(var(--dx,0px),var(--dy,0px));
             color:${theme.font.color};font-size:${capSize}px;font-weight:${theme.font.weight};
             font-family:${fontFamily};line-height:1.12;text-align:center;text-wrap:balance;
             z-index:3;text-shadow:0 ${H * 0.004}px ${H * 0.02}px rgba(0,0,0,0.25);">${escapeHtml(p.caption)}</div>`
@@ -285,8 +291,9 @@ export function renderSet(
       const mockup = isTablet
         ? tabletMockupHtml({ ...common, thicknessPct: dev.thicknessPct ?? 6 })
         : phoneMockupHtml({ ...common, thicknessPct: dev.thicknessPct ?? 8, landscape });
-      const deviceHtml = `<div style="position:absolute;left:${deviceLeft}px;top:${deviceTop}px;
-          width:${deviceW}px;height:${deviceH}px;perspective:${deviceW * 4}px;z-index:2;">
+      const deviceHtml = `<div id="dev-wrap-${i}" style="position:absolute;left:${deviceLeft}px;top:${deviceTop}px;
+          width:${deviceW}px;height:${deviceH}px;perspective:${deviceW * 4}px;z-index:2;
+          transform:translate(var(--dx,0px),var(--dy,0px));">
           <div style="position:absolute;left:4%;top:74%;width:92%;height:22%;
             background:radial-gradient(50% 50% at 50% 50%, rgba(0,0,0,0.55), rgba(0,0,0,0));
             filter:blur(${H * 0.012}px);z-index:0;"></div>
@@ -294,12 +301,14 @@ export function renderSet(
         </div>`;
 
       // Serbest metin kutuları (başlıkla aynı katman, panele oranlı konum).
+      // j = orijinal indeks (editör tutamağıyla eşleşsin); boş metinler render'dan düşer.
       const textsHtml = (p.texts ?? [])
-        .filter((t) => t.text)
-        .map((t) => {
+        .map((t, j) => ({ t, j }))
+        .filter(({ t }) => t.text)
+        .map(({ t, j }) => {
           const size = ((t.sizePct ?? 3.2) / 100) * H;
-          return `<div style="position:absolute;left:${i * W + t.xFrac * W}px;top:${t.yFrac * H}px;
-            transform:translateX(-50%);max-width:${W * 0.9}px;color:${t.color ?? theme.font.color};
+          return `<div id="txt-${i}-${j}" style="position:absolute;left:${i * W + t.xFrac * W}px;top:${t.yFrac * H}px;
+            transform:translateX(-50%) translate(var(--dx,0px),var(--dy,0px));max-width:${W * 0.9}px;color:${t.color ?? theme.font.color};
             font-size:${size}px;font-weight:${t.weight ?? 600};font-family:${fontFamily};
             line-height:1.25;text-align:center;white-space:pre-wrap;z-index:3;
             text-shadow:0 ${H * 0.003}px ${H * 0.015}px rgba(0,0,0,0.2);">${escapeHtml(t.text)}</div>`;
@@ -325,6 +334,12 @@ export function renderSet(
     background: ${bg};
     overflow: hidden;
     font-family: ${fontFamily};
+    /* Açı değişkenleri (tüm cihazlarca miras alınır). Editör bunları belge kurmadan
+       canlı güncelleyerek 60fps döndürür; export/ilk paint bu başlangıç değerini kullanır. */
+    --tilt: ${tiltY}deg;
+    --tiltx: ${tiltX}deg;
+    --lean: ${leanDeg}deg;
+    --land: ${landDeg}deg;
   }
 </style>
 </head>
