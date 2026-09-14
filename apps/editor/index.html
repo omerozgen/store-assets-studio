@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vitrinshot — App Store & Google Play screenshot generator</title>
+  <meta name="description"
+    content="Create polished, panorama-style App Store and Google Play screenshots in exact sizes and multiple languages — free, no sign-up, right in your browser." />
+  <link rel="canonical" href="https://vitrinshot.com/" />
+  <meta name="theme-color" content="#6366f1" />
+
+  <!-- Favicon / app icons -->
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/site.webmanifest" />
+
+  <!-- Open Graph / Twitter -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Vitrinshot" />
+  <meta property="og:url" content="https://vitrinshot.com/" />
+  <meta property="og:title" content="Vitrinshot — App Store & Google Play screenshot generator" />
+  <meta property="og:description"
+    content="Polished, panorama-style store screenshots in exact sizes and multiple languages — free, no sign-up." />
+  <meta property="og:image" content="https://vitrinshot.com/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Vitrinshot — App Store & Google Play screenshot generator" />
+  <meta name="twitter:description"
+    content="Polished, panorama-style store screenshots in exact sizes and multiple languages — free, no sign-up." />
+  <meta name="twitter:image" content="https://vitrinshot.com/og-image.png" />
+
+  <!-- Google Analytics — KVKK/GDPR: gtag script'i onaya kadar HİÇ yüklenmez.
+       Burada yalnızca consent varsayılanı "denied" kurulur; kullanıcı çerez
+       banner'ından "Kabul et"e basınca GA script'i dinamik yüklenir (CookieConsent.tsx).
+       Böylece onay öncesi/Reddet sonrası hiçbir veri Google'a gitmez. -->
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag() { dataLayer.push(arguments); }
+    gtag('consent', 'default', {
+      ad_storage: 'denied',
+      ad_user_data: 'denied',
+      ad_personalization: 'denied',
+      analytics_storage: 'denied'
+    });
+  </script>
+
+
+</head>
+
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+
+</html>

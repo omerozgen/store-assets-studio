@@ -1,0 +1,34 @@
+{
+  "name": "store-assets-studio",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @sas/render-service --filter @sas/editor dev",
+    "render:demo": "pnpm --filter @sas/render-service demo",
+    "render:set": "pnpm --filter @sas/render-service demo:set",
+    "render:photo": "pnpm --filter @sas/render-service demo:photo",
+    "export:serve": "pnpm --filter @sas/render-service serve",
+    "editor": "pnpm --filter @sas/editor dev",
+    "build:web": "pnpm --filter @sas/editor build && pnpm --filter @sas/render-service prerender",
+    "test:specs": "pnpm --filter @sas/store-specs test",
+    "test:png": "pnpm --filter @sas/render-service test",
+    "test": "pnpm test:specs && pnpm test:png && pnpm typecheck",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "postcss@<=8.5.22": ">=8.5.23",
+      "react-router@>=7.12.0 <7.18.2": ">=7.18.2",
+      "nanoid@<3.3.18": ">=3.3.18",
+      "browserslist@<=4.28.6": ">=4.28.7",
+      "baseline-browser-mapping@>=2.0.0 <2.11.0": ">=2.11.0"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: store-assets-studio
+    ports:
+      - "8080:8080"
+    environment:
+      - NODE_ENV=production
+      - PORT=8080
+      - RATE_LIMIT_PER_DAY=0
+      - MAX_CONCURRENT_RENDERS=4
+    restart: unless-stopped

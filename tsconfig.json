@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "@sas/core-renderer": ["./packages/core-renderer/src/index.ts"],
+      "@sas/device-frames": ["./packages/device-frames/src/index.ts"],
+      "@sas/store-specs": ["./packages/store-specs/src/index.ts"],
+      "@sas/themes": ["./packages/themes/src/index.ts"]
+    }
+  },
+  "include": ["packages/*/src", "apps/*/src"]
+}
